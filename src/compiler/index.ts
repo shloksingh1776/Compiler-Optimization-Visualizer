@@ -78,7 +78,8 @@ export { generateTAC } from './ir/tacGenerator.ts';
 export { formatOperand, formatInstruction, formatTAC } from './ir/tacPrinter.ts';
 
 // --- Phase 6-7: Optimization (constant propagation, folding, algebraic simplification, DCE) ---
-export { optimize, OPTIMIZATION_PASSES, type OptimizationPassInfo } from './optimizer/optimizer.ts';
+export { optimize, optimizeWithTrace, OPTIMIZATION_PASSES, type OptimizationPassInfo, type OptimizationResult } from './optimizer/optimizer.ts';
+export { type OptimizationTrace, type OptimizationTraceStep } from './optimizer/trace.ts';
 export { constantPropagation } from './optimizer/passes/constantPropagation.ts';
 export { constantFolding } from './optimizer/passes/constantFolding.ts';
 export { algebraicSimplification } from './optimizer/passes/algebraicSimplification.ts';

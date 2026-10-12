@@ -63,6 +63,8 @@ import { algebraicSimplification } from './passes/algebraicSimplification.ts';
 import { commonSubexpressionElimination, commonSubexpressionEliminationInstructions } from './passes/commonSubexpressionElimination.ts';
 import { copyPropagation, copyPropagationInstructions } from './passes/copyPropagation.ts';
 import { deadCodeElimination } from './passes/deadCodeElimination.ts';
+import type { OptimizationTrace, OptimizationTraceStep } from './trace.ts';
+import { createOptimizationTraceStep } from './trace.ts';
 
 /**
  * One entry in `OPTIMIZATION_PASSES`: a pass name plus a one-line,
@@ -229,7 +231,18 @@ function materializePrintedConstants(program: TACProgram): TACProgram {
  *   const optimizedTac = optimize(tac);
  *   tac !== optimizedTac   // true: the original is untouched
  */
-export function optimize(program: TACProgram): TACProgram {
+export interface OptimizationResult {
+  readonly program: TACProgram;
+  readonly trace: OptimizationTrace;
+}
+
+/**
+ * Run the existing optimization pipeline and capture the TAC after every
+ * pass. The optimization algorithms and their ordering are intentionally the
+ * same as `optimize()` has always used; this function only records snapshots
+ * for the visualizer.
+ */
+export function optimizeWithTrace(program: TACProgram): OptimizationResult {
   const hasMainControlFlow = program.instructions.some((instruction) =>
     instruction.kind === 'label' ||
     instruction.kind === 'jump' ||
@@ -237,49 +250,150 @@ export function optimize(program: TACProgram): TACProgram {
     instruction.kind === 'call'
   );
 
-  const optimizeFunctionBodies = () =>
-    Object.fromEntries(
-      Object.entries(program.functions ?? {}).map(([name, fn]) => {
+  const trace: OptimizationTraceStep[] = [
+    createOptimizationTraceStep('original', 'Original TAC', 'TAC generated before optimization begins.', program, false),
+  ];
+
+  const optimizeFunctionBodiesAtCSE = (input: TACProgram): TACProgram => ({
+    ...input,
+    functions: Object.fromEntries(
+      Object.entries(input.functions ?? {}).map(([name, fn]) => {
         const afterCSE = commonSubexpressionEliminationInstructions(fn.instructions);
-        return [
-          name,
-          {
-            ...fn,
-            // Function TAC is isolated per function. Run CSE followed by copy
-            // propagation independently inside each body.
-            instructions: copyPropagationInstructions(afterCSE),
-          },
-        ];
+        return [name, { ...fn, instructions: afterCSE }];
       })
-    );
+    ),
+  });
+
+  const optimizeFunctionBodiesAtCopy = (input: TACProgram): TACProgram => ({
+    ...input,
+    functions: Object.fromEntries(
+      Object.entries(input.functions ?? {}).map(([name, fn]) => ({
+        name,
+        fn: { ...fn, instructions: copyPropagationInstructions(fn.instructions) },
+      })).map(({ name, fn }) => [name, fn])
+    ),
+  });
 
   if (hasMainControlFlow) {
-    const afterCSE = commonSubexpressionElimination(program);
-    const afterCopyPropagation = copyPropagation(afterCSE);
+    const unchanged = (name: string, description: string, current: TACProgram, note: string) => {
+      const pass = OPTIMIZATION_PASSES.find((item) => item.name === name);
+      trace.push(createOptimizationTraceStep(name, pass?.name ?? name, description, current, false, note));
+    };
+
+    unchanged(
+      OPTIMIZATION_PASSES[0]!.name,
+      OPTIMIZATION_PASSES[0]!.description,
+      program,
+      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
+    );
+    unchanged(
+      OPTIMIZATION_PASSES[1]!.name,
+      OPTIMIZATION_PASSES[1]!.description,
+      program,
+      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
+    );
+    unchanged(
+      OPTIMIZATION_PASSES[2]!.name,
+      OPTIMIZATION_PASSES[2]!.description,
+      program,
+      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
+    );
+
+    const afterCSE: TACProgram = {
+      ...commonSubexpressionElimination(program),
+      functions: optimizeFunctionBodiesAtCSE(program).functions,
+    };
+    trace.push(createOptimizationTraceStep(
+      'cse',
+      OPTIMIZATION_PASSES[3]!.name,
+      OPTIMIZATION_PASSES[3]!.description,
+      afterCSE,
+    ));
+
+    const afterCopyPropagation: TACProgram = {
+      ...copyPropagation(afterCSE),
+      functions: optimizeFunctionBodiesAtCopy(afterCSE).functions,
+    };
+    trace.push(createOptimizationTraceStep(
+      'copy-propagation',
+      OPTIMIZATION_PASSES[4]!.name,
+      OPTIMIZATION_PASSES[4]!.description,
+      afterCopyPropagation,
+    ));
+
+    trace.push(createOptimizationTraceStep(
+      'dead-code-elimination',
+      OPTIMIZATION_PASSES[5]!.name,
+      OPTIMIZATION_PASSES[5]!.description,
+      afterCopyPropagation,
+      false,
+      'Skipped for the main program because the existing optimizer keeps control-flow TAC conservative. The existing pipeline does not run DCE on function bodies.'
+    ));
+    trace.push(createOptimizationTraceStep(
+      'final',
+      'Final Optimized TAC',
+      'The exact TAC returned by the compiler after the existing optimization work.',
+      afterCopyPropagation,
+    ));
+
     return {
-      instructions: afterCopyPropagation.instructions,
-      temporaryCount: program.temporaryCount,
-      functions: optimizeFunctionBodies(),
+      program: afterCopyPropagation,
+      trace: { steps: trace },
     };
   }
 
-  const afterPropagation = constantPropagation(program);
-  const afterFolding = constantFolding(afterPropagation);
-  const afterSimplification = algebraicSimplification(afterFolding);
-  const afterCSE = commonSubexpressionElimination(afterSimplification);
-  const afterCopyPropagation = copyPropagation(afterCSE);
-  const afterDeadCodeElimination = deadCodeElimination(afterCopyPropagation);
-
-  // Stage 8 function bodies are stored separately from the main instruction
-  // list. CSE and copy propagation are applied independently to each body.
-  const optimizedFunctions = optimizeFunctionBodies();
-
-  const materialized = afterDeadCodeElimination.instructions.some((instruction) => instruction.kind === 'print')
-    ? materializePrintedConstants(afterDeadCodeElimination)
-    : afterDeadCodeElimination;
-
-  return {
-    ...materialized,
-    functions: optimizedFunctions,
+  const afterPropagation: TACProgram = {
+    ...constantPropagation(program),
+    functions: program.functions,
   };
+  trace.push(createOptimizationTraceStep('constant-propagation', OPTIMIZATION_PASSES[0]!.name, OPTIMIZATION_PASSES[0]!.description, afterPropagation, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
+
+  const afterFolding: TACProgram = {
+    ...constantFolding(afterPropagation),
+    functions: afterPropagation.functions,
+  };
+  trace.push(createOptimizationTraceStep('constant-folding', OPTIMIZATION_PASSES[1]!.name, OPTIMIZATION_PASSES[1]!.description, afterFolding, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
+
+  const afterSimplification: TACProgram = {
+    ...algebraicSimplification(afterFolding),
+    functions: afterFolding.functions,
+  };
+  trace.push(createOptimizationTraceStep('algebraic-simplification', OPTIMIZATION_PASSES[2]!.name, OPTIMIZATION_PASSES[2]!.description, afterSimplification, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
+
+  const afterCSE: TACProgram = {
+    ...commonSubexpressionElimination(afterSimplification),
+    functions: optimizeFunctionBodiesAtCSE(afterSimplification).functions,
+  };
+  trace.push(createOptimizationTraceStep('cse', OPTIMIZATION_PASSES[3]!.name, OPTIMIZATION_PASSES[3]!.description, afterCSE));
+
+  const afterCopyPropagation: TACProgram = {
+    ...copyPropagation(afterCSE),
+    functions: optimizeFunctionBodiesAtCopy(afterCSE).functions,
+  };
+  trace.push(createOptimizationTraceStep('copy-propagation', OPTIMIZATION_PASSES[4]!.name, OPTIMIZATION_PASSES[4]!.description, afterCopyPropagation));
+
+  const afterDeadCodeElimination = deadCodeElimination(afterCopyPropagation);
+  const afterDCE: TACProgram = {
+    ...afterDeadCodeElimination,
+    functions: afterCopyPropagation.functions,
+  };
+  trace.push(createOptimizationTraceStep('dead-code-elimination', OPTIMIZATION_PASSES[5]!.name, OPTIMIZATION_PASSES[5]!.description, afterDCE, true, 'Applied to the main program only; the existing optimizer does not run DCE on function bodies.'));
+
+  const materialized = afterDCE.instructions.some((instruction) => instruction.kind === 'print')
+    ? materializePrintedConstants(afterDCE)
+    : afterDCE;
+
+  trace.push(createOptimizationTraceStep(
+    'final',
+    'Final Optimized TAC',
+    'The exact TAC returned by the compiler after all existing optimization work and print-value materialization.',
+    materialized,
+  ));
+
+  return { program: materialized, trace: { steps: trace } };
 }
+
+export function optimize(program: TACProgram): TACProgram {
+  return optimizeWithTrace(program).program;
+}
+

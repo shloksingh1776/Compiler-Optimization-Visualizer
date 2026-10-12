@@ -24,10 +24,11 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { compile, OPTIMIZATION_PASSES, type FunctionDecl } from './compiler/index.ts';
 import AstView from './components/AstView.tsx';
 import SymbolTableView from './components/SymbolTableView.tsx';
-import TacView from './components/TacView.tsx';
+import OptimizationTraceView from './components/OptimizationTraceView.tsx';
 import OptimizationPanel from './components/OptimizationPanel.tsx';
 import ErrorPanel from './components/ErrorPanel.tsx';
-import { SAMPLES, DEFAULT_SAMPLE } from './examples/samples.ts';
+import ExampleSelector from './components/ExampleSelector.tsx';
+import { SAMPLES, DEFAULT_SAMPLE, type Sample } from './examples/samples.ts';
 
 /** Section wrapper, so every panel is titled and spaced the same way. */
 function Section({
@@ -51,6 +52,11 @@ function Section({
 
 export default function App() {
   const [source, setSource] = useState<string>(DEFAULT_SAMPLE.source);
+  const [loadedSampleId, setLoadedSampleId] = useState<string>(DEFAULT_SAMPLE.id);
+  const loadSample = (sample: Sample) => {
+    setSource(sample.source);
+    setLoadedSampleId(sample.id);
+  };
 
   // The whole compiler runs here, and only when the source actually changes.
   // It is fast enough (microseconds on these programs) to run on every
@@ -62,8 +68,7 @@ export default function App() {
     ast,
     symbols,
     functionSymbols,
-    tac,
-    optimizedTac,
+    optimizationTrace,
     comparison,
     lexicalErrors,
     syntaxErrors,
@@ -75,7 +80,6 @@ export default function App() {
     returnValue,
   } = result;
   const lineCount = source.split('\n').length;
-  const functionCount = Object.keys(functionSymbols).length;
   const localSymbolCount = Object.values(functionSymbols).reduce((total, entries) => total + entries.length, 0);
   const hasErrors =
     lexicalErrors.length + syntaxErrors.length + semanticErrors.length + divisionByZeroErrors.length > 0;
@@ -90,23 +94,14 @@ export default function App() {
             symbol table, three address code, control flow and optimization
           </p>
         </div>
-        <label className="text-sm text-slate-400">
-          <span className="mr-2">Example:</span>
-          <select
-            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-slate-200"
-            onChange={(event) => {
-              const sample = SAMPLES.find((s) => s.id === event.target.value);
-              if (sample) setSource(sample.source);
-            }}
-            defaultValue={DEFAULT_SAMPLE.id}
-          >
-            {SAMPLES.map((sample) => (
-              <option key={sample.id} value={sample.id}>
-                {sample.title}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="w-full sm:max-w-xl">
+          <ExampleSelector
+            samples={SAMPLES}
+            initialId={DEFAULT_SAMPLE.id}
+            loadedId={loadedSampleId}
+            onLoad={loadSample}
+          />
+        </div>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -187,34 +182,17 @@ export default function App() {
 
       {/* ---------------- 5. Three Address Code ---------------- */}
       <Section number={5} title="Three Address Code">
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div>
-            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">
-              <span className="h-2 w-2 rounded-full bg-sky-500" aria-hidden="true" />
-              Original TAC{tac !== null ? ` (main ${tac.instructions.length}${functionCount > 0 ? ` + ${functionCount} function${functionCount === 1 ? '' : 's'}` : ''})` : ''}
-            </h3>
-            <div className="border-l-2 border-sky-500/40 pl-3">
-              <TacView tac={tac} ran={stageStatus.tac === 'ok'} />
-            </div>
-          </div>
-          <div>
-            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
-              Optimized TAC{optimizedTac !== null ? ` (main ${optimizedTac.instructions.length}${functionCount > 0 ? ` + ${functionCount} function${functionCount === 1 ? '' : 's'}` : ''})` : ''}
-            </h3>
-            <div className="border-l-2 border-emerald-500/40 pl-3">
-              <TacView
-                tac={optimizedTac}
-                ran={stageStatus.optimization === 'ok'}
-                skippedMessage="Optimization did not run: either there was no TAC to optimize, or a compile-time error (such as division by zero) was found. See the errors below."
-              />
-            </div>
-          </div>
+        <div className="mb-3">
+          <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-wide text-slate-400 uppercase">
+            <span className="h-2 w-2 rounded-full bg-sky-500" aria-hidden="true" />
+            Optimization Steps
+          </h3>
+          <OptimizationTraceView trace={optimizationTrace} ran={stageStatus.optimization === 'ok'} />
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Original TAC is generated before optimization. The main program TAC and each function body
-          are shown separately. CSE is also applied independently inside each function body;
-          calls and control-flow boundaries are handled conservatively.
+          Select a step to inspect the actual TAC snapshot after that pass. Original TAC, each
+          existing optimization pass, and final optimized TAC are captured. Main-program TAC and
+          each function body are shown separately in every snapshot.
         </p>
         <div className="mt-3">
           <OptimizationPanel passes={OPTIMIZATION_PASSES} comparison={comparison} />

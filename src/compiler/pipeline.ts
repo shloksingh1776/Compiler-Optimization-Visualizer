@@ -70,7 +70,8 @@ import { analyze } from './semantic/analyzer.ts';
 import type { Symbol } from './semantic/symbolTable.ts';
 import { generateTAC } from './ir/tacGenerator.ts';
 import type { TACProgram } from './ir/tac.ts';
-import { optimize } from './optimizer/optimizer.ts';
+import { optimizeWithTrace } from './optimizer/optimizer.ts';
+import type { OptimizationTrace } from './optimizer/trace.ts';
 import { constantPropagation } from './optimizer/passes/constantPropagation.ts';
 import { checkDivisionByZero } from './optimizer/divisionByZeroCheck.ts';
 import { compareTAC, type TACComparison } from './optimizer/comparison.ts';
@@ -120,6 +121,8 @@ export interface CompilationResult {
    * so both can be shown side by side as a genuine before/after.
    */
   readonly optimizedTac: TACProgram | null;
+  /** Actual TAC snapshots captured after each optimization pass. */
+  readonly optimizationTrace: OptimizationTrace | null;
   /**
    * A before/after summary of what optimization changed -- instruction
    * counts, whether anything changed at all -- or null under exactly the
@@ -180,6 +183,7 @@ export function compile(source: string): CompilationResult {
       functionSymbols: {},
       tac: null,
       optimizedTac: null,
+      optimizationTrace: null,
       comparison: null,
       output: [],
       lexicalErrors,
@@ -211,6 +215,7 @@ export function compile(source: string): CompilationResult {
       functionSymbols: {},
       tac: null,
       optimizedTac: null,
+      optimizationTrace: null,
       comparison: null,
       output: [],
       lexicalErrors: [],
@@ -249,6 +254,7 @@ export function compile(source: string): CompilationResult {
       functionSymbols: Object.fromEntries(semantic.functionSymbols),
       tac: null,
       optimizedTac: null,
+      optimizationTrace: null,
       comparison: null,
       output: [],
       lexicalErrors: [],
@@ -300,6 +306,7 @@ export function compile(source: string): CompilationResult {
       functionSymbols: Object.fromEntries(semantic.functionSymbols),
       tac,
       optimizedTac: null,
+      optimizationTrace: null,
       comparison: null,
       output: [],
       lexicalErrors: [],
@@ -319,9 +326,9 @@ export function compile(source: string): CompilationResult {
 
   // --- Optimization: constant propagation, folding, algebraic simplification, dead code elimination ---
   // `optimize` never mutates `tac`: it returns a brand new TACProgram, so
-  // `tac` and `optimizedTac` can both be handed to the UI as independent,
-  // genuinely different snapshots for a before/after comparison.
-  const optimizedTac = optimize(tac);
+  // `tac` and `optimizedTac` can both be retained as independent snapshots for the trace and final comparison.
+  const optimization = optimizeWithTrace(tac);
+  const optimizedTac = optimization.program;
 
   // Before/after summary for the UI -- see comparison.ts for what "changed"
   // means and why it is not just an instruction-count check.
@@ -361,6 +368,7 @@ export function compile(source: string): CompilationResult {
     functionSymbols: Object.fromEntries(semantic.functionSymbols),
     tac,
     optimizedTac,
+    optimizationTrace: optimization.trace,
     comparison,
     output,
     ...(returnValue !== undefined ? { returnValue } : {}),
