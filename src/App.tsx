@@ -28,6 +28,7 @@ import OptimizationTraceView from './components/OptimizationTraceView.tsx';
 import OptimizationPanel from './components/OptimizationPanel.tsx';
 import ErrorPanel from './components/ErrorPanel.tsx';
 import ExampleSelector from './components/ExampleSelector.tsx';
+import CodeEditor from './components/CodeEditor.tsx';
 import { SAMPLES, DEFAULT_SAMPLE, type Sample } from './examples/samples.ts';
 
 /** Section wrapper, so every panel is titled and spaced the same way. */
@@ -107,16 +108,11 @@ export default function App() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* ---------------- 1. Source ---------------- */}
         <Section number={1} title="Source Code">
-          <textarea
-            value={source}
-            onChange={(event) => setSource(event.target.value)}
-            spellCheck={false}
-            aria-label="MiniC v1 source code"
-            className="h-72 w-full resize-none rounded border border-slate-700 bg-slate-900 p-3 font-mono text-sm outline-none focus:border-slate-500"
-          />
-          <p className="mt-1 text-xs text-slate-500">
-            {lineCount} {lineCount === 1 ? 'line' : 'lines'}, {source.length} characters
-          </p>
+          <CodeEditor source={source} onChange={setSource} ariaLabel="MiniC v1 source code" />
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <p>{lineCount} {lineCount === 1 ? 'line' : 'lines'}, {source.length} characters</p>
+            <p>Tab: indent · Enter: continue indentation · Matching brackets highlighted</p>
+          </div>
         </Section>
 
         {/* ---------------- 2. Tokens ---------------- */}

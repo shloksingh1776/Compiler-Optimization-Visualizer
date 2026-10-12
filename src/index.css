@@ -1,1 +1,141 @@
 @import "tailwindcss";
+
+/* Stage 3: accessible textarea layered over a syntax-coloured text mirror. */
+.code-editor {
+  display: flex;
+  width: 100%;
+  height: 22rem;
+  overflow: hidden;
+  border: 1px solid #334155;
+  border-radius: 0.5rem;
+  background: #0b1220;
+  transition: border-color 120ms ease;
+}
+
+.code-editor:focus-within {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 1px rgb(56 189 248 / 20%);
+}
+
+.code-editor__gutter,
+.code-editor__highlight,
+.code-editor__input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-variant-ligatures: none;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 24px;
+  tab-size: 2;
+}
+
+.code-editor__gutter {
+  z-index: 2;
+  flex: 0 0 3.25rem;
+  overflow: hidden;
+  border-right: 1px solid #1e293b;
+  background: #0f172a;
+  padding: 12px 0.7rem 12px 0;
+  color: #64748b;
+  text-align: right;
+  user-select: none;
+}
+
+.code-editor__gutter-inner {
+  will-change: transform;
+}
+
+.code-editor__line-number {
+  display: block;
+  height: 24px;
+}
+
+.code-editor__viewport {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: #0b1220;
+}
+
+.code-editor__highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  box-sizing: content-box;
+  margin: 0;
+  padding: 12px;
+  overflow: visible;
+  color: #e2e8f0;
+  white-space: pre;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.code-editor__input {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  outline: 0;
+  padding: 12px;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: #f8fafc;
+  white-space: pre;
+  overflow-wrap: normal;
+  tab-size: 2;
+}
+
+.code-editor__input::selection {
+  background: rgb(56 189 248 / 32%);
+  color: transparent;
+}
+
+.code-editor__input::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.code-editor__input::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.code-editor__input::-webkit-scrollbar-thumb {
+  border: 2px solid #0f172a;
+  border-radius: 999px;
+  background: #475569;
+}
+
+.syntax-type { color: #67e8f9; }
+.syntax-keyword { color: #c4b5fd; }
+.syntax-literal,
+.syntax-number { color: #fbbf24; }
+.syntax-operator { color: #fb7185; }
+.syntax-punctuation { color: #94a3b8; }
+.syntax-function { color: #7dd3fc; }
+.syntax-identifier { color: #e2e8f0; }
+.syntax-comment { color: #64748b; font-style: italic; }
+.syntax-plain,
+.syntax-whitespace { color: #e2e8f0; }
+.syntax-bracket-match {
+  border-radius: 2px;
+  outline: 1px solid rgb(56 189 248 / 60%);
+  background: rgb(14 165 233 / 22%);
+  color: #bae6fd;
+  font-weight: 700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-editor { transition: none; }
+}

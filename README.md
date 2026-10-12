@@ -39,6 +39,8 @@ table, original vs. optimized three address code (with the ordered list of
 optimization passes, what each one does, and before/after statistics), and
 diagnostics for every compiler error.
 
+The source editor includes MiniC syntax highlighting, line numbers, Tab/Shift+Tab indentation, indentation continuation on Enter, and matching-bracket highlighting. It is implemented locally without adding an editor dependency; compiler tokenization and semantics remain in `src/compiler/`.
+
 ---
 
 ## Running the project
