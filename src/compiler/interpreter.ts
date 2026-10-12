@@ -77,10 +77,11 @@ function executeInstructions(program: TACProgram, instructions: readonly TACInst
         for(let i=0;i<fn.parameters.length;i++) frame.set(fn.parameters[i]!.name,readOperand(instruction.args[i]!,values));
         const nested=executeInstructions(program,fn.instructions,frame,depth+1);
         output.push(...nested.output);
+        if (fn.returnType === 'void' || instruction.targetType === 'void') { pc++; break; }
         if(nested.returnValue===undefined) throw new Error(`Function '${instruction.functionName}' returned no value`);
         values.set(instruction.target,nested.returnValue); pc++; break;
       }
-      case 'return': return { output, returnValue: readOperand(instruction.operand,values) };
+      case 'return': return instruction.targetType === 'void' ? { output } : { output, returnValue: readOperand(instruction.operand,values) };
       case 'param': case 'functionBegin': case 'functionEnd': pc++; break;
     }
   }

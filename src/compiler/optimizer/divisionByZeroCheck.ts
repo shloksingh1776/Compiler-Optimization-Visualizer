@@ -110,15 +110,30 @@ function findSpanInStmt(stmt: Stmt, id: string): SourceSpan | undefined {
       return stmt.init === null ? undefined : findSpanInExpr(stmt.init, id);
     case 'Assignment':
       return findSpanInExpr(stmt.value, id);
+    case 'IncrementStmt':
+    case 'BreakStmt':
+    case 'ContinueStmt':
+      return undefined;
     case 'PrintStmt':
       return findSpanInExpr(stmt.expression, id);
+    case 'CallStmt':
+      for (const arg of stmt.arguments) { const found = findSpanInExpr(arg, id); if (found) return found; }
+      return undefined;
     case 'ReturnStmt':
-      return findSpanInExpr(stmt.expression, id);
+      return stmt.expression === null ? undefined : findSpanInExpr(stmt.expression, id);
     case 'FunctionDecl':
       return stmt.body.map((child) => findSpanInStmt(child, id)).find((x) => x !== undefined);
     case 'WhileStmt':
       return findSpanInExpr(stmt.condition, id)
         ?? stmt.body.map((child) => findSpanInStmt(child, id)).find((x) => x !== undefined);
+    case 'ForStmt':
+      return (stmt.initializer ? findSpanInStmt(stmt.initializer, id) : undefined)
+        ?? (stmt.condition ? findSpanInExpr(stmt.condition, id) : undefined)
+        ?? (stmt.update ? findSpanInStmt(stmt.update, id) : undefined)
+        ?? stmt.body.map((child) => findSpanInStmt(child, id)).find((x) => x !== undefined);
+    case 'SwitchStmt':
+      return findSpanInExpr(stmt.expression, id)
+        ?? stmt.cases.flatMap((entry) => entry.body).map((child) => findSpanInStmt(child, id)).find((x) => x !== undefined);
     case 'IfStmt': {
       if (stmt.condition.id === id) return stmt.condition;
       return findSpanInExpr(stmt.condition, id)

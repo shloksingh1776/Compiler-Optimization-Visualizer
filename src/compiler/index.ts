@@ -13,7 +13,7 @@
  * comparison of the original and optimized TAC.
  */
 
-export { type MiniCType } from './types.ts';
+export { type MiniCType, type FunctionReturnType } from './types.ts';
 
 // --- Errors (shared by every stage) ---
 export {
@@ -36,6 +36,7 @@ export {
   type AstNode,
   type Assignment,
   type CallExpr,
+  type CallStmt,
   type ConditionalExpr,
   type BinaryExpr,
   type BooleanLiteral,
@@ -44,8 +45,13 @@ export {
   type Identifier,
   type IfStmt,
   type WhileStmt,
+  type ForStmt,
+  type SwitchStmt,
+  type SwitchCase,
   type FunctionDecl,
   type ReturnStmt,
+  type BreakStmt,
+  type ContinueStmt,
   type NodeBase,
   type NumberLiteral,
   type Program,

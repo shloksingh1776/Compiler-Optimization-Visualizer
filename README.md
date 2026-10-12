@@ -93,11 +93,11 @@ int e = -5;        // unary minus
 int f = 100 / 4;   // integer division
 ```
 
-**Supported:** `int`, `float`, and `bool` declarations and assignments; integer and floating-point literals; `true`/`false`; arithmetic `+ - * /`; comparisons `< > <= >= == !=`; logical `&& || !`; unary minus; parentheses; `if`/`else`; `while`; functions; `return`; `print`; `//` comments; and semicolon-terminated statements.
+**Supported:** `int`, `float`, `bool`, and `void` function return types; integer and floating-point literals; `true`/`false`; arithmetic `+ - * / %`; comparisons `< > <= >= == !=`; logical `&& || !`; unary minus; parentheses; `if`/`else`; `while` and `for` loops; loop-local `break` and `continue`; value-returning and void functions with parameters; `return expression;` and `return;` in void functions; standalone function calls; `print`; `//` comments; and semicolon-terminated statements.
 
-**Not in the current scope:** arrays, pointers, strings, classes/structs, `for`, `do-while`, `break`, `continue`, or a full C/C++ language implementation.
+**Not in the current scope:** arrays, pointers, strings, classes/structs, `do-while`, `switch/case`, or a full C/C++ language implementation.
 
-The language now includes control flow. The TAC generator uses labels and jumps for `if`/`else`, `while`, and short-circuit logical operators. Optimization remains conservative around control-flow boundaries.
+The language now includes control flow and void functions. The TAC generator uses labels and jumps for `if`/`else`, loops, and short-circuit logical operators. Void calls execute for their side effects without producing a usable expression value. Optimization remains conservative around control-flow boundaries.
 
 ---
 
@@ -426,3 +426,8 @@ MiniC supports the conditional expression `condition ? thenExpression : elseExpr
 ## Stage 16 — Compound assignment
 
 The MiniC subset supports `+=`, `-=`, `*=`, `/=` and `%=` as standalone assignment statements. Compound assignments are translated to ordinary arithmetic TAC followed by a copy, so the existing optimizer and interpreter pipeline remains in use. `%` and `%=` require integer operands; the other compound arithmetic operators accept numeric operands and reject `bool`.
+
+
+## Stage 17: `for` loops
+
+The MiniC subset supports C-style `for (initialization; condition; update) { ... }` loops, including omitted initialization, condition, or update clauses. The loop is lowered to labels and jumps in TAC and works with existing arithmetic, compound assignment, postfix increment/decrement, functions, conditionals, and optimization.

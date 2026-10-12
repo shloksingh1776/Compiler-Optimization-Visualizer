@@ -133,7 +133,7 @@ function rewriteInstruction(instruction: TACInstruction, env: CopyEnvironment, t
 
     case 'call': {
       const args = instruction.args.map((arg) => resolve(arg, env));
-      invalidateWrittenName(env, { kind: 'temporary', name: instruction.target, valueType: instruction.targetType });
+      invalidateWrittenName(env, { kind: 'temporary', name: instruction.target, valueType: instruction.targetType === 'void' ? undefined : instruction.targetType });
       env.clear();
       return args.every((arg, i) => arg === instruction.args[i]) ? instruction : { ...instruction, args };
     }

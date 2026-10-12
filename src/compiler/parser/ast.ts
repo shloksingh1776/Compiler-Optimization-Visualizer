@@ -95,7 +95,7 @@ export interface UnaryExpr extends NodeBase {
 }
 
 /** An integer literal, e.g. `42`. */
-import type { MiniCType } from '../types.ts';
+import type { FunctionReturnType, MiniCType } from '../types.ts';
 
 export interface BooleanLiteral extends NodeBase {
   readonly type: 'BooleanLiteral';
@@ -159,13 +159,30 @@ export interface PrintStmt extends NodeBase {
 
 export interface ReturnStmt extends NodeBase {
   readonly type: 'ReturnStmt';
-  readonly expression: Expr;
+  readonly expression: Expr | null;
+}
+
+/** A standalone function call, including calls to void functions. */
+export interface CallStmt extends NodeBase {
+  readonly type: 'CallStmt';
+  readonly name: string;
+  readonly arguments: Expr[];
+}
+
+/** Exit the nearest enclosing loop. */
+export interface BreakStmt extends NodeBase {
+  readonly type: 'BreakStmt';
+}
+
+/** Skip to the next iteration of the nearest enclosing loop. */
+export interface ContinueStmt extends NodeBase {
+  readonly type: 'ContinueStmt';
 }
 
 export interface FunctionDecl extends NodeBase {
   readonly type: 'FunctionDecl';
   readonly name: string;
-  readonly returnType: MiniCType;
+  readonly returnType: FunctionReturnType;
   readonly parameters: { readonly name: string; readonly type: MiniCType; readonly line: number; readonly column: number }[];
   readonly body: Stmt[];
 }
@@ -180,6 +197,31 @@ export interface IfStmt extends NodeBase {
 export interface WhileStmt extends NodeBase {
   readonly type: 'WhileStmt';
   readonly condition: Expr;
+  readonly body: Stmt[];
+}
+
+/** C-style for loop. Each header clause may be omitted. */
+export interface SwitchCase {
+  /** Integer case value, or null for the single default label. */
+  readonly value: number | null;
+  readonly line: number;
+  readonly column: number;
+  readonly start: number;
+  readonly end: number;
+  readonly body: Stmt[];
+}
+
+export interface SwitchStmt extends NodeBase {
+  readonly type: 'SwitchStmt';
+  readonly expression: Expr;
+  readonly cases: SwitchCase[];
+}
+
+export interface ForStmt extends NodeBase {
+  readonly type: 'ForStmt';
+  readonly initializer: VarDecl | Assignment | IncrementStmt | null;
+  readonly condition: Expr | null;
+  readonly update: Assignment | IncrementStmt | null;
   readonly body: Stmt[];
 }
 
@@ -204,7 +246,7 @@ export interface Assignment extends NodeBase {
   readonly nameColumn: number;
 }
 
-export type Stmt = VarDecl | Assignment | IncrementStmt | PrintStmt | ReturnStmt | IfStmt | WhileStmt | FunctionDecl;
+export type Stmt = VarDecl | Assignment | IncrementStmt | PrintStmt | CallStmt | ReturnStmt | BreakStmt | ContinueStmt | IfStmt | WhileStmt | ForStmt | SwitchStmt | FunctionDecl;
 
 /* ------------------------------------------------------------------ */
 /* Root                                                                */

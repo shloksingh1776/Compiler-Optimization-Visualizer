@@ -60,7 +60,7 @@ export function formatInstruction(instruction: TACInstruction): string {
     case 'jump':
       return `goto ${instruction.label}`;
     case 'call':
-      return `${instruction.target} = call ${instruction.functionName}(${instruction.args.map(formatOperand).join(', ')})`;
+      return instruction.targetType === 'void' ? `call ${instruction.functionName}(${instruction.args.map(formatOperand).join(', ')})` : `${instruction.target} = call ${instruction.functionName}(${instruction.args.map(formatOperand).join(', ')})`;
     case 'param':
       return `param ${instruction.name}`;
     case 'functionBegin':
@@ -70,7 +70,7 @@ export function formatInstruction(instruction: TACInstruction): string {
     case 'print':
       return `print ${formatOperand(instruction.operand)}`;
     case 'return':
-      return `return ${formatOperand(instruction.operand)}`;
+      return instruction.targetType === 'void' ? 'return' : `return ${formatOperand(instruction.operand)}`;
   }
 }
 

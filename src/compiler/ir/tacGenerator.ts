@@ -82,8 +82,8 @@
  * The same AST always produces byte-identical TAC.
  */
 
-import type { Assignment, Expr, Program, Stmt, VarDecl, PrintStmt, FunctionDecl, IncrementStmt } from '../parser/ast.ts';
-import type { MiniCType } from '../types.ts';
+import type { Assignment, Expr, Program, Stmt, VarDecl, PrintStmt, CallStmt, FunctionDecl, IncrementStmt, SwitchStmt } from '../parser/ast.ts';
+import type { FunctionReturnType, MiniCType } from '../types.ts';
 import type { Operand, TACInstruction, TACProgram, TACFunction } from './tac.ts';
 
 class TACGenerator {
@@ -92,7 +92,9 @@ class TACGenerator {
   private labelCount = 0;
   private readonly variableTypes = new Map<string, MiniCType>();
   private readonly functions = new Map<string, TACFunction>();
-  private readonly functionReturnTypes = new Map<string, MiniCType>();
+  private readonly functionReturnTypes = new Map<string, FunctionReturnType>();
+  private readonly breakTargets: string[] = [];
+  private readonly continueTargets: string[] = [];
 
   generate(program: Program): TACProgram {
     for (const statement of program.body) {
@@ -138,14 +140,33 @@ class TACGenerator {
       case 'PrintStmt':
         this.generatePrint(statement);
         return;
+      case 'CallStmt':
+        this.generateCallStatement(statement);
+        return;
       case 'ReturnStmt':
         this.generateReturn(statement);
         return;
+      case 'BreakStmt': {
+        const target = this.breakTargets[this.breakTargets.length - 1];
+        if (target) this.emit({ kind: 'jump', label: target, sourceNodeId: statement.id });
+        return;
+      }
+      case 'ContinueStmt': {
+        const target = this.continueTargets[this.continueTargets.length - 1];
+        if (target) this.emit({ kind: 'jump', label: target, sourceNodeId: statement.id });
+        return;
+      }
       case 'IfStmt':
         this.generateIf(statement);
         return;
       case 'WhileStmt':
         this.generateWhile(statement);
+        return;
+      case 'ForStmt':
+        this.generateFor(statement);
+        return;
+      case 'SwitchStmt':
+        this.generateSwitch(statement);
         return;
       case 'FunctionDecl':
         return;
@@ -236,8 +257,18 @@ class TACGenerator {
   }
 
   private generateReturn(statement: Extract<Stmt, { type: 'ReturnStmt' }>): void {
+    if (statement.expression === null) {
+      this.emit({ kind: 'return', operand: { kind: 'constant', value: 0, valueType: 'int' }, targetType: 'void', sourceNodeId: statement.id });
+      return;
+    }
     const operand = this.generateExpression(statement.expression);
     this.emit({ kind: 'return', operand, targetType: operand.valueType ?? 'int', sourceNodeId: statement.id });
+  }
+
+  private generateCallStatement(statement: CallStmt): void {
+    const args = statement.arguments.map(arg => this.generateExpression(arg));
+    const target = this.freshTemporary();
+    this.emit({ kind: 'call', target, targetType: this.functionReturnTypes.get(statement.name) ?? 'void', functionName: statement.name, args, sourceNodeId: statement.id });
   }
 
   private generatePrint(statement: PrintStmt): void {
@@ -248,12 +279,65 @@ class TACGenerator {
   private generateWhile(statement: Extract<Stmt, { type: 'WhileStmt' }>): void {
     const conditionLabel = this.freshLabel();
     const endLabel = this.freshLabel();
+    this.breakTargets.push(endLabel);
+    this.continueTargets.push(conditionLabel);
     this.emit({ kind: 'label', label: conditionLabel, sourceNodeId: statement.id });
     const condition = this.generateExpression(statement.condition);
     this.emit({ kind: 'jumpIfFalse', condition, label: endLabel, sourceNodeId: statement.id });
     for (const child of statement.body) this.generateStatement(child);
     this.emit({ kind: 'jump', label: conditionLabel, sourceNodeId: statement.id });
     this.emit({ kind: 'label', label: endLabel, sourceNodeId: statement.id });
+    this.breakTargets.pop();
+    this.continueTargets.pop();
+  }
+
+  private generateFor(statement: Extract<Stmt, { type: 'ForStmt' }>): void {
+    if (statement.initializer) this.generateStatement(statement.initializer);
+    const conditionLabel = this.freshLabel();
+    const updateLabel = this.freshLabel();
+    const endLabel = this.freshLabel();
+    this.breakTargets.push(endLabel);
+    this.continueTargets.push(updateLabel);
+    this.emit({ kind: 'label', label: conditionLabel, sourceNodeId: statement.id });
+    if (statement.condition) {
+      const condition = this.generateExpression(statement.condition);
+      this.emit({ kind: 'jumpIfFalse', condition, label: endLabel, sourceNodeId: statement.id });
+    }
+    for (const child of statement.body) this.generateStatement(child);
+    this.emit({ kind: 'label', label: updateLabel, sourceNodeId: statement.id });
+    if (statement.update) this.generateStatement(statement.update);
+    this.emit({ kind: 'jump', label: conditionLabel, sourceNodeId: statement.id });
+    this.emit({ kind: 'label', label: endLabel, sourceNodeId: statement.id });
+    this.breakTargets.pop();
+    this.continueTargets.pop();
+  }
+
+  /** Lower switch dispatch to comparisons and jumps; case bodies naturally fall through. */
+  private generateSwitch(statement: SwitchStmt): void {
+    const selector = this.generateExpression(statement.expression);
+    const endLabel = this.freshLabel();
+    const caseLabels = statement.cases.map(() => this.freshLabel());
+    const defaultIndex = statement.cases.findIndex((entry) => entry.value === null);
+
+    for (let i = 0; i < statement.cases.length; i++) {
+      const switchCase = statement.cases[i]!;
+      if (switchCase.value === null) continue;
+      const nextCheck = this.freshLabel();
+      const comparison = this.freshTemporary();
+      this.emit({ kind: 'binary', target: comparison, targetType: 'bool', left: selector, operator: '==', right: { kind: 'constant', value: switchCase.value, valueType: 'int' }, sourceNodeId: statement.id });
+      this.emit({ kind: 'jumpIfFalse', condition: { kind: 'temporary', name: comparison, valueType: 'bool' }, label: nextCheck, sourceNodeId: statement.id });
+      this.emit({ kind: 'jump', label: caseLabels[i]!, sourceNodeId: statement.id });
+      this.emit({ kind: 'label', label: nextCheck, sourceNodeId: statement.id });
+    }
+    this.emit({ kind: 'jump', label: defaultIndex >= 0 ? caseLabels[defaultIndex]! : endLabel, sourceNodeId: statement.id });
+
+    this.breakTargets.push(endLabel);
+    for (let i = 0; i < statement.cases.length; i++) {
+      this.emit({ kind: 'label', label: caseLabels[i]!, sourceNodeId: statement.id });
+      for (const child of statement.cases[i]!.body) this.generateStatement(child);
+    }
+    this.emit({ kind: 'label', label: endLabel, sourceNodeId: statement.id });
+    this.breakTargets.pop();
   }
 
   private generateIf(statement: Extract<Stmt, { type: 'IfStmt' }>): void {
@@ -329,7 +413,7 @@ class TACGenerator {
       case 'NumberLiteral': return expression.valueType ?? (expression.value % 1 !== 0 ? 'float' : 'int');
       case 'BooleanLiteral': return 'bool';
       case 'Identifier': return this.variableTypes.get(expression.name) ?? 'int';
-      case 'CallExpr': return this.functionReturnTypes.get(expression.name) ?? 'int';
+      case 'CallExpr': { const t = this.functionReturnTypes.get(expression.name) ?? 'int'; return t === 'void' ? 'int' : t; }
       case 'UnaryExpr': return expression.operator === '!' ? 'bool' : this.expressionType(expression.operand);
       case 'BinaryExpr': {
         if (expression.operator === '&&' || expression.operator === '||' || ['<','>','<=','>=','==','!='].includes(expression.operator)) return 'bool';
@@ -436,8 +520,9 @@ class TACGenerator {
         const args = expression.arguments.map((arg) => this.generateExpression(arg));
         const target = this.freshTemporary();
         const returnType = this.functionReturnTypes.get(expression.name) ?? 'int';
+        const valueType: MiniCType = returnType === 'void' ? 'int' : returnType;
         this.emit({ kind: 'call', target, targetType: returnType, functionName: expression.name, args, sourceNodeId: expression.id });
-        return { kind: 'temporary', name: target, valueType: returnType };
+        return { kind: 'temporary', name: target, valueType };
       }
 
       case 'Identifier':

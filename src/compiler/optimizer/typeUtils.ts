@@ -24,12 +24,12 @@ export function instructionTargetType(instruction: TACInstruction): MiniCType {
   switch (instruction.kind) {
     case 'label': case 'jump': case 'param': case 'functionBegin': case 'functionEnd': return 'int';
     case 'jumpIfFalse': return operandType(instruction.condition);
-    case 'call': return instruction.targetType ?? 'int';
+    case 'call': return instruction.targetType === 'void' ? 'int' : instruction.targetType ?? 'int';
     case 'assign': return instruction.targetType ?? operandType(instruction.value);
     case 'copy': return instruction.targetType ?? operandType(instruction.source);
     case 'binary': return instruction.targetType ?? (isComparisonOperator(instruction.operator) ? 'bool' : numericResultType(undefined, instruction.left, instruction.right));
     case 'unary': return instruction.targetType ?? operandType(instruction.operand);
     case 'print': return instruction.targetType ?? operandType(instruction.operand);
-    case 'return': return instruction.targetType ?? operandType(instruction.operand);
+    case 'return': return instruction.targetType === 'void' ? operandType(instruction.operand) : instruction.targetType ?? operandType(instruction.operand);
   }
 }

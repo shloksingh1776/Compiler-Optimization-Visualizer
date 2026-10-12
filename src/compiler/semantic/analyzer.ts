@@ -46,7 +46,7 @@
 
 import { makeError, type CompilerError } from '../errors.ts';
 import type { Assignment, Expr, Program, Stmt, VarDecl } from '../parser/ast.ts';
-import type { MiniCType } from '../types.ts';
+import type { FunctionReturnType, MiniCType } from '../types.ts';
 import { SymbolTable, type Symbol } from './symbolTable.ts';
 
 /** Result of analysing one program. */
@@ -57,7 +57,7 @@ export interface SemanticResult {
   readonly symbolTable: SymbolTable;
   /** All semantic errors found. Empty means the program is well formed. */
   readonly errors: CompilerError[];
-  readonly functions: ReadonlyMap<string, { returnType: MiniCType; parameters: { name: string; type: MiniCType }[] }>;
+  readonly functions: ReadonlyMap<string, { returnType: FunctionReturnType; parameters: { name: string; type: MiniCType }[] }>;
   /** Local symbols collected per function, kept separate from the legacy global symbols array. */
   readonly functionSymbols: ReadonlyMap<string, Symbol[]>;
 }
@@ -65,7 +65,7 @@ export interface SemanticResult {
 class Analyzer {
   private readonly table = new SymbolTable();
   private readonly errors: CompilerError[] = [];
-  private readonly functions = new Map<string, { returnType: MiniCType; parameters: { name: string; type: MiniCType }[] }>();
+  private readonly functions = new Map<string, { returnType: FunctionReturnType; parameters: { name: string; type: MiniCType }[] }>();
   private readonly functionSymbols = new Map<string, Symbol[]>();
 
   analyze(program: Program): SemanticResult {
@@ -98,7 +98,7 @@ class Analyzer {
     this.functionSymbols.set(fn.name, local.all());
   }
 
-  private analyzeStatement(statement: Stmt, table: SymbolTable, returnType: MiniCType | null): void {
+  private analyzeStatement(statement: Stmt, table: SymbolTable, returnType: FunctionReturnType | null, loopDepth = 0, switchDepth = 0): void {
     switch (statement.type) {
       case 'VarDecl': this.analyzeDeclaration(statement, table); return;
       case 'Assignment': this.analyzeAssignment(statement, table); return;
@@ -112,24 +112,77 @@ class Analyzer {
         return;
       }
       case 'PrintStmt': this.analyzeExpression(statement.expression, table); return;
+      case 'CallStmt': {
+        const fn = this.functions.get(statement.name);
+        if (!fn) this.report(`Undefined function '${statement.name}'`, statement.line, statement.column, statement.start, statement.end);
+        if (fn && statement.arguments.length !== fn.parameters.length) this.report(`Function '${statement.name}' expects ${fn.parameters.length} argument(s), but got ${statement.arguments.length}`, statement.line, statement.column, statement.start, statement.end);
+        statement.arguments.forEach((arg, i) => { const at = this.analyzeExpression(arg, table); const expected = fn?.parameters[i]; if (expected && at && !this.isAssignable(expected.type, at)) this.report(`Argument ${i + 1} of '${statement.name}' expects ${expected.type}, got ${at}`, arg.line, arg.column, arg.start, arg.end); });
+        return;
+      }
+      case 'BreakStmt':
+        if (loopDepth === 0 && switchDepth === 0) this.report("'break' can only be used inside a loop or switch", statement.line, statement.column, statement.start, statement.end);
+        return;
+      case 'ContinueStmt':
+        if (loopDepth === 0) this.report("'continue' can only be used inside a loop", statement.line, statement.column, statement.start, statement.end);
+        return;
       case 'ReturnStmt': {
+        if (statement.expression === null) {
+          if (returnType !== null && returnType !== 'void') this.report(`Non-void function must return a ${returnType} value`, statement.line, statement.column, statement.start, statement.end);
+          return;
+        }
         const t = this.analyzeExpression(statement.expression, table);
-        if (returnType !== null && t !== null && !this.isAssignable(returnType, t)) this.report(`Cannot return ${t} expression from ${returnType} function`, statement.line, statement.column, statement.start, statement.end);
+        if (returnType === 'void') this.report('Void function cannot return a value', statement.line, statement.column, statement.start, statement.end);
+        else if (returnType !== null && t !== null && !this.isAssignable(returnType, t)) this.report(`Cannot return ${t} expression from ${returnType} function`, statement.line, statement.column, statement.start, statement.end);
         return;
       }
       case 'IfStmt':
         const ct = this.analyzeExpression(statement.condition, table);
         if (ct !== null && ct !== 'bool') this.report('If condition must be a bool expression', statement.condition.line, statement.condition.column, statement.condition.start, statement.condition.end);
-        for (const child of statement.thenBranch) this.analyzeStatement(child, table, returnType);
-        if (statement.elseBranch) for (const child of statement.elseBranch) this.analyzeStatement(child, table, returnType);
+        for (const child of statement.thenBranch) this.analyzeStatement(child, table, returnType, loopDepth, switchDepth);
+        if (statement.elseBranch) for (const child of statement.elseBranch) this.analyzeStatement(child, table, returnType, loopDepth, switchDepth);
         return;
       case 'WhileStmt': {
         const wt = this.analyzeExpression(statement.condition, table);
         if (wt !== null && wt !== 'bool') this.report('While condition must be a bool expression', statement.condition.line, statement.condition.column, statement.condition.start, statement.condition.end);
-        for (const child of statement.body) this.analyzeStatement(child, table, returnType);
+        for (const child of statement.body) this.analyzeStatement(child, table, returnType, loopDepth + 1, switchDepth);
         return;
       }
-      case 'FunctionDecl': return;
+      case 'ForStmt': {
+        if (statement.initializer) this.analyzeStatement(statement.initializer, table, returnType, loopDepth);
+        if (statement.condition) {
+          const ft = this.analyzeExpression(statement.condition, table);
+          if (ft !== null && ft !== 'bool') this.report('For condition must be a bool expression', statement.condition.line, statement.condition.column, statement.condition.start, statement.condition.end);
+        }
+        for (const child of statement.body) this.analyzeStatement(child, table, returnType, loopDepth + 1, switchDepth);
+        if (statement.update) this.analyzeStatement(statement.update, table, returnType, loopDepth, switchDepth);
+        return;
+      }
+      case 'SwitchStmt': {
+        const selectorType = this.analyzeExpression(statement.expression, table);
+        if (selectorType !== null && selectorType !== 'int') {
+          this.report('Switch expression must have type int', statement.expression.line, statement.expression.column, statement.expression.start, statement.expression.end);
+        }
+        const seenValues = new Set<number>();
+        let seenDefault = false;
+        for (const switchCase of statement.cases) {
+          if (switchCase.value === null) {
+            if (seenDefault) this.report("A switch statement may contain only one 'default' label", switchCase.line, switchCase.column, switchCase.start, switchCase.end);
+            seenDefault = true;
+          } else {
+            if (seenValues.has(switchCase.value)) this.report(`Duplicate case value '${switchCase.value}'`, switchCase.line, switchCase.column, switchCase.start, switchCase.end);
+            seenValues.add(switchCase.value);
+          }
+          for (const child of switchCase.body) this.analyzeStatement(child, table, returnType, loopDepth, switchDepth + 1);
+        }
+        return;
+      }
+      case 'FunctionDecl':
+        // Function declarations are supported only at program scope. Still
+        // analyze a misplaced declaration's body in a fresh function context
+        // so an enclosing loop cannot incorrectly authorize break/continue.
+        this.report('Function declarations are only allowed at the top level', statement.line, statement.column, statement.start, statement.end);
+        this.analyzeFunction(statement);
+        return;
     }
   }
 
@@ -193,6 +246,7 @@ class Analyzer {
         if (!fn) { this.report(`Undefined function '${expression.name}'`, expression.line, expression.column, expression.start, expression.end); expression.arguments.forEach(a => this.analyzeExpression(a, table)); return null; }
         if (expression.arguments.length !== fn.parameters.length) this.report(`Function '${expression.name}' expects ${fn.parameters.length} argument(s), but got ${expression.arguments.length}`, expression.line, expression.column, expression.start, expression.end);
         expression.arguments.forEach((arg, i) => { const at = this.analyzeExpression(arg, table); const expected = fn.parameters[i]; if (expected && at && !this.isAssignable(expected.type, at)) this.report(`Argument ${i + 1} of '${expression.name}' expects ${expected.type}, got ${at}`, arg.line, arg.column, arg.start, arg.end); });
+        if (fn.returnType === 'void') { this.report(`Void function '${expression.name}' cannot be used as an expression`, expression.line, expression.column, expression.start, expression.end); return null; }
         return fn.returnType;
       }
       case 'UnaryExpr': {

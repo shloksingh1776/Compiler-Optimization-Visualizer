@@ -45,7 +45,7 @@
  * variable the user named, a literal value, or a compiler-introduced
  * temporary. There is nothing else for an operand to be.
  */
-import type { MiniCType } from '../types.ts';
+import type { FunctionReturnType, MiniCType } from '../types.ts';
 
 export type Operand =
   | { readonly kind: 'variable'; readonly name: string; readonly valueType?: MiniCType }
@@ -140,14 +140,14 @@ export type TACInstruction =
       readonly kind: 'return';
       /** Optional compatibility fields: return has no assignment target. */
       readonly target?: string;
-      readonly targetType?: MiniCType;
+      readonly targetType?: FunctionReturnType;
       readonly operand: Operand;
       readonly sourceNodeId: string;
     }
   | {
       readonly kind: 'call';
       readonly target: string;
-      readonly targetType?: MiniCType;
+      readonly targetType?: FunctionReturnType;
       readonly functionName: string;
       readonly args: Operand[];
       readonly sourceNodeId: string;
@@ -194,7 +194,7 @@ export type TACInstruction =
 export interface TACFunction {
   readonly name: string;
   readonly parameters: { readonly name: string; readonly type: MiniCType }[];
-  readonly returnType: MiniCType;
+  readonly returnType: FunctionReturnType;
   readonly instructions: TACInstruction[];
 }
 

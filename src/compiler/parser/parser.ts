@@ -58,7 +58,7 @@
  */
 
 import { TokenType, type Token } from '../lexer/tokens.ts';
-import type { MiniCType } from '../types.ts';
+import type { FunctionReturnType, MiniCType } from '../types.ts';
 import { makeError, type CompilerError } from '../errors.ts';
 import type {
   Assignment,
@@ -72,11 +72,17 @@ import type {
   Stmt,
   VarDecl,
   PrintStmt,
+  CallStmt,
   ReturnStmt,
+  BreakStmt,
+  ContinueStmt,
   IfStmt,
   WhileStmt,
+  ForStmt,
   FunctionDecl,
   ConditionalExpr,
+  SwitchStmt,
+  SwitchCase,
 } from './ast.ts';
 
 /** Result of parsing a token stream. */
@@ -121,6 +127,9 @@ class Parser {
 
   /** Counter behind the stable node ids n0, n1, n2, ... */
   private nextNodeId = 0;
+
+  /** Current function context; null means a top-level statement. */
+  private currentFunctionReturnType: FunctionReturnType | null = null;
 
   constructor(tokens: readonly Token[]) {
     this.tokens = tokens;
@@ -263,6 +272,7 @@ class Parser {
    * identifier starts an assignment. Nothing else can begin a statement.
    */
   private parseStatement(): Stmt {
+    if (this.check(TokenType.VOID)) return this.parseFunction();
     if (this.check(TokenType.INT) || this.check(TokenType.FLOAT) || this.check(TokenType.BOOL)) {
       if (this.tokens[this.current + 2]?.type === TokenType.LPAREN) return this.parseFunction();
       return this.parseDeclaration();
@@ -270,8 +280,13 @@ class Parser {
     if (this.check(TokenType.PRINT)) return this.parsePrint();
     if (this.check(TokenType.IF)) return this.parseIf();
     if (this.check(TokenType.WHILE)) return this.parseWhile();
+    if (this.check(TokenType.FOR)) return this.parseFor();
+    if (this.check(TokenType.SWITCH)) return this.parseSwitch();
     if (this.check(TokenType.RETURN)) return this.parseReturn();
+    if (this.check(TokenType.BREAK)) return this.parseLoopControl('BreakStmt');
+    if (this.check(TokenType.CONTINUE)) return this.parseLoopControl('ContinueStmt');
     if (this.check(TokenType.IDENTIFIER)) {
+      if (this.tokens[this.current + 1]?.type === TokenType.LPAREN) return this.parseCallStatement();
       if (this.tokens[this.current + 1]?.type === TokenType.INCREMENT || this.tokens[this.current + 1]?.type === TokenType.DECREMENT) {
         return this.parseIncrement();
       }
@@ -289,7 +304,7 @@ class Parser {
 
   private parseFunction(): FunctionDecl {
     const typeToken = this.advance();
-    const returnType: MiniCType = typeToken.type === TokenType.FLOAT ? 'float' : typeToken.type === TokenType.BOOL ? 'bool' : 'int';
+    const returnType: FunctionReturnType = typeToken.type === TokenType.VOID ? 'void' : typeToken.type === TokenType.FLOAT ? 'float' : typeToken.type === TokenType.BOOL ? 'bool' : 'int';
     const nameToken = this.consume(TokenType.IDENTIFIER, "Expected a function name after return type");
     this.consume(TokenType.LPAREN, "Expected '(' after function name");
     const parameters: { name: string; type: MiniCType; line: number; column: number }[] = [];
@@ -303,7 +318,14 @@ class Parser {
       } while (this.match(TokenType.COMMA));
     }
     this.consume(TokenType.RPAREN, "Expected ')' after parameters");
-    const body = this.parseBlock();
+    const previousReturnType = this.currentFunctionReturnType;
+    this.currentFunctionReturnType = returnType;
+    let body: Stmt[];
+    try {
+      body = this.parseBlock();
+    } finally {
+      this.currentFunctionReturnType = previousReturnType;
+    }
     return { type: 'FunctionDecl', id: this.id(), name: nameToken.lexeme, returnType, parameters, body,
       line: typeToken.line, column: typeToken.column, start: typeToken.start, end: this.previous().end };
   }
@@ -365,15 +387,42 @@ class Parser {
     };
   }
 
+  /** `name(args);` is a statement, principally used to call void functions. */
+  private parseCallStatement(): CallStmt {
+    const name = this.consume(TokenType.IDENTIFIER, "Expected function name");
+    this.consume(TokenType.LPAREN, "Expected '(' after function name");
+    const args: Expr[] = [];
+    if (!this.check(TokenType.RPAREN)) {
+      do { args.push(this.parseExpression()); } while (this.match(TokenType.COMMA));
+    }
+    this.consume(TokenType.RPAREN, "Expected ')' after function arguments");
+    const semicolon = this.consume(TokenType.SEMICOLON, "Expected ';' after function call");
+    return { type: 'CallStmt', id: this.id(), name: name.lexeme, arguments: args, line: name.line, column: name.column, start: name.start, end: semicolon.end };
+  }
+
   /** `return expression;` returns a value from the current program/function context. */
   private parseReturn(): ReturnStmt {
     const returnToken = this.consume(TokenType.RETURN, "Expected 'return'");
-    const expression = this.parseExpression();
+    if (this.check(TokenType.SEMICOLON) && this.currentFunctionReturnType === null) {
+      throw this.error(returnToken, "A top-level return statement must include a value");
+    }
+    const expression = this.check(TokenType.SEMICOLON) ? null : this.parseExpression();
     const semicolon = this.consume(TokenType.SEMICOLON, "Expected ';' after return statement");
     return {
       type: 'ReturnStmt', id: this.id(), expression,
       line: returnToken.line, column: returnToken.column,
       start: returnToken.start, end: semicolon.end,
+    };
+  }
+
+  /** `break;` and `continue;` are validated against loop nesting semantically. */
+  private parseLoopControl(type: 'BreakStmt' | 'ContinueStmt'): BreakStmt | ContinueStmt {
+    const keywordType = type === 'BreakStmt' ? TokenType.BREAK : TokenType.CONTINUE;
+    const keyword = this.consume(keywordType, type === 'BreakStmt' ? "Expected 'break'" : "Expected 'continue'");
+    const semicolon = this.consume(TokenType.SEMICOLON, `Expected ';' after '${keyword.lexeme}'`);
+    return {
+      type, id: this.id(), line: keyword.line, column: keyword.column,
+      start: keyword.start, end: semicolon.end,
     };
   }
 
@@ -412,6 +461,89 @@ class Parser {
     };
   }
 
+  /** `for (initialization; condition; update) { ... }` */
+  private parseFor(): ForStmt {
+    const forToken = this.consume(TokenType.FOR, "Expected 'for'");
+    this.consume(TokenType.LPAREN, "Expected '(' after 'for'");
+
+    let initializer: VarDecl | Assignment | IncrementStmt | null = null;
+    if (!this.check(TokenType.SEMICOLON)) {
+      if (this.check(TokenType.INT) || this.check(TokenType.FLOAT) || this.check(TokenType.BOOL)) {
+        initializer = this.parseDeclaration(); // consumes first header semicolon
+      } else if (this.check(TokenType.IDENTIFIER)) {
+        initializer = this.tokens[this.current + 1]?.type === TokenType.INCREMENT || this.tokens[this.current + 1]?.type === TokenType.DECREMENT
+          ? this.parseIncrement(false)
+          : this.parseAssignment(false);
+        this.consume(TokenType.SEMICOLON, "Expected ';' after for-loop initialization");
+      } else {
+        throw this.error(this.peek(), 'Expected a declaration or assignment in for-loop initialization');
+      }
+    } else {
+      this.advance();
+    }
+
+    const condition = this.check(TokenType.SEMICOLON) ? null : this.parseExpression();
+    this.consume(TokenType.SEMICOLON, "Expected ';' after for-loop condition");
+
+    let update: Assignment | IncrementStmt | null = null;
+    if (!this.check(TokenType.RPAREN)) {
+      if (!this.check(TokenType.IDENTIFIER)) throw this.error(this.peek(), 'Expected an assignment or postfix increment/decrement in for-loop update');
+      update = this.tokens[this.current + 1]?.type === TokenType.INCREMENT || this.tokens[this.current + 1]?.type === TokenType.DECREMENT
+        ? this.parseIncrement(false)
+        : this.parseAssignment(false);
+    }
+    this.consume(TokenType.RPAREN, "Expected ')' after for-loop header");
+    const body = this.parseBlock();
+    return { type: 'ForStmt', id: this.id(), initializer, condition, update, body,
+      line: forToken.line, column: forToken.column, start: forToken.start, end: this.previous().end };
+  }
+
+  /** `switch (expression) { case integer: statements ... default: statements }`. */
+  private parseSwitch(): SwitchStmt {
+    const switchToken = this.consume(TokenType.SWITCH, "Expected 'switch'");
+    this.consume(TokenType.LPAREN, "Expected '(' after 'switch'");
+    const expression = this.parseExpression();
+    this.consume(TokenType.RPAREN, "Expected ')' after switch expression");
+    this.consume(TokenType.LBRACE, "Expected '{' to start switch body");
+
+    const cases: SwitchCase[] = [];
+    while (!this.check(TokenType.RBRACE) && !this.isAtEnd()) {
+      let value: number | null;
+      let labelToken: Token;
+      if (this.check(TokenType.CASE)) {
+        labelToken = this.advance();
+        let sign = 1;
+        if (this.match(TokenType.MINUS)) sign = -1;
+        const literal = this.consume(TokenType.NUMBER, "Expected an integer literal after 'case'");
+        if (literal.lexeme.includes('.')) throw this.error(literal, "Case labels must be integer constants");
+        value = sign * (literal.value ?? 0);
+      } else if (this.check(TokenType.DEFAULT)) {
+        labelToken = this.advance();
+        value = null;
+      } else {
+        throw this.error(this.peek(), "Expected 'case', 'default' or '}' in switch body");
+      }
+      this.consume(TokenType.COLON, "Expected ':' after switch label");
+      const body: Stmt[] = [];
+      while (!this.check(TokenType.CASE) && !this.check(TokenType.DEFAULT) && !this.check(TokenType.RBRACE) && !this.isAtEnd()) {
+        const positionBefore = this.current;
+        try {
+          body.push(this.parseStatement());
+        } catch (error) {
+          if (!(error instanceof ParseError)) throw error;
+          this.errors.push(error.compilerError);
+          this.synchronize();
+          if (this.current === positionBefore && !this.isAtEnd()) this.advance();
+        }
+      }
+      const end = body.length > 0 ? body[body.length - 1]!.end : this.previous().end;
+      cases.push({ value, line: labelToken.line, column: labelToken.column, start: labelToken.start, end, body });
+    }
+    const close = this.consume(TokenType.RBRACE, "Expected '}' after switch body");
+    return { type: 'SwitchStmt', id: this.id(), expression, cases,
+      line: switchToken.line, column: switchToken.column, start: switchToken.start, end: close.end };
+  }
+
   private parseBlock(): Stmt[] {
     this.consume(TokenType.LBRACE, "Expected '{' to start block");
     const statements: Stmt[] = [];
@@ -430,11 +562,11 @@ class Parser {
   }
 
   /** `name++ ;` / `name-- ;` -- Stage 15 supports postfix form as a statement. */
-  private parseIncrement(): IncrementStmt {
+  private parseIncrement(consumeSemicolon = true): IncrementStmt {
     const nameToken = this.consume(TokenType.IDENTIFIER, 'Expected a variable name');
     const operatorToken = this.advance();
     const operator: '++' | '--' = operatorToken.type === TokenType.INCREMENT ? '++' : '--';
-    const semicolon = this.consume(TokenType.SEMICOLON, "Expected ';' after increment/decrement");
+    const endToken = consumeSemicolon ? this.consume(TokenType.SEMICOLON, "Expected ';' after increment/decrement") : operatorToken;
     return {
       type: 'IncrementStmt',
       id: this.id(),
@@ -445,14 +577,14 @@ class Parser {
       line: nameToken.line,
       column: nameToken.column,
       start: nameToken.start,
-      end: semicolon.end,
+      end: endToken.end,
     };
   }
 
   /**
    *      assignment -> IDENTIFIER "=" expression ";"
    */
-  private parseAssignment(): Assignment {
+  private parseAssignment(consumeSemicolon = true): Assignment {
     const nameToken = this.consume(
       TokenType.IDENTIFIER,
       'Expected a variable name'
@@ -468,10 +600,7 @@ class Parser {
       throw this.error(assignmentToken, "Expected '=', '+=', '-=', '*=', '/=' or '%=' after variable name");
     }
     const value = this.parseExpression();
-    const semicolon = this.consume(
-      TokenType.SEMICOLON,
-      "Expected ';' after assignment"
-    );
+    const endToken = consumeSemicolon ? this.consume(TokenType.SEMICOLON, "Expected ';' after assignment") : this.previous();
 
     return {
       type: 'Assignment',
@@ -484,7 +613,7 @@ class Parser {
       line: nameToken.line,
       column: nameToken.column,
       start: nameToken.start,
-      end: semicolon.end,
+      end: endToken.end,
     };
   }
 
@@ -778,7 +907,7 @@ class Parser {
 
     while (!this.isAtEnd()) {
       if (this.previous().type === TokenType.SEMICOLON) return;
-      if (this.check(TokenType.INT) || this.check(TokenType.FLOAT) || this.check(TokenType.BOOL) || this.check(TokenType.PRINT) || this.check(TokenType.RETURN)) return;
+      if (this.check(TokenType.INT) || this.check(TokenType.FLOAT) || this.check(TokenType.BOOL) || this.check(TokenType.FOR) || this.check(TokenType.PRINT) || this.check(TokenType.RETURN) || this.check(TokenType.SWITCH) || this.check(TokenType.CASE) || this.check(TokenType.DEFAULT)) return;
       this.advance();
     }
   }

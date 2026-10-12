@@ -117,12 +117,40 @@ function statementNode(stmt: Stmt): TreeNode {
     case 'PrintStmt':
       return { ...base, kind: 'PrintStmt', value: 'print', children: [expressionNode(stmt.expression)] };
     case 'ReturnStmt':
-      return { ...base, kind: 'ReturnStmt', value: 'return', children: [expressionNode(stmt.expression)] };
+      return { ...base, kind: 'ReturnStmt', value: 'return', children: stmt.expression === null ? [] : [expressionNode(stmt.expression)] };
+    case 'CallStmt':
+      return { ...base, kind: 'CallStmt', value: `${stmt.name}()`, children: stmt.arguments.map(expressionNode) };
+    case 'BreakStmt':
+      return { ...base, kind: 'BreakStmt', value: 'break', children: [] };
+    case 'ContinueStmt':
+      return { ...base, kind: 'ContinueStmt', value: 'continue', children: [] };
     case 'FunctionDecl':
       return { ...base, kind: 'FunctionDecl', value: `${stmt.returnType} ${stmt.name}`, children: [
         { id: `${stmt.id}-params`, kind: 'Parameters', value: null, line: stmt.line, column: stmt.column, children: stmt.parameters.map(p => ({ id: `${stmt.id}-param-${p.name}`, kind: 'Parameter', value: `${p.type} ${p.name}`, line: p.line, column: p.column, children: [] })) },
         { id: `${stmt.id}-body`, kind: 'FunctionBody', value: null, line: stmt.line, column: stmt.column, children: stmt.body.map(statementNode) },
       ] };
+    case 'ForStmt':
+      return {
+        ...base, kind: 'ForStmt', value: 'for',
+        children: [
+          ...(stmt.initializer ? [{ id: `${stmt.id}-initializer`, kind: 'Initializer', value: null, line: stmt.initializer.line, column: stmt.initializer.column, children: [statementNode(stmt.initializer)] }] : []),
+          ...(stmt.condition ? [{ id: `${stmt.id}-condition`, kind: 'Condition', value: null, line: stmt.condition.line, column: stmt.condition.column, children: [expressionNode(stmt.condition)] }] : []),
+          ...(stmt.update ? [{ id: `${stmt.id}-update`, kind: 'Update', value: null, line: stmt.update.line, column: stmt.update.column, children: [statementNode(stmt.update)] }] : []),
+          { id: `${stmt.id}-body`, kind: 'ForBody', value: null, line: stmt.line, column: stmt.column, children: stmt.body.map(statementNode) },
+        ],
+      };
+    case 'SwitchStmt':
+      return {
+        ...base, kind: 'SwitchStmt', value: 'switch',
+        children: [
+          { id: `${stmt.id}-expression`, kind: 'Expression', value: null, line: stmt.expression.line, column: stmt.expression.column, children: [expressionNode(stmt.expression)] },
+          ...stmt.cases.map((entry, index) => ({
+            id: `${stmt.id}-case-${index}`, kind: entry.value === null ? 'DefaultCase' : 'Case',
+            value: entry.value === null ? 'default' : String(entry.value), line: entry.line, column: entry.column,
+            children: entry.body.map(statementNode),
+          })),
+        ],
+      };
     case 'WhileStmt':
       return {
         ...base, kind: 'WhileStmt', value: 'while',

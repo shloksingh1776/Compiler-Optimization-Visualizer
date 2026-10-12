@@ -331,8 +331,12 @@ export function compile(source: string): CompilationResult {
   // compiler tests intentionally use undeclared/uninitialized variables in
   // otherwise valid TAC examples; attempting to execute those programs would
   // introduce a runtime concern that Stage 5 did not intend to add.
-  const hasPrint = optimizedTac.instructions.some((instruction) => instruction.kind === 'print');
-  const hasReturn = optimizedTac.instructions.some((instruction) => instruction.kind === 'return');
+  const allInstructions = [
+    ...optimizedTac.instructions,
+    ...Object.values(optimizedTac.functions ?? {}).flatMap((fn) => fn.instructions),
+  ];
+  const hasPrint = allInstructions.some((instruction) => instruction.kind === 'print');
+  const hasReturn = allInstructions.some((instruction) => instruction.kind === 'return');
   let output: string[] = [];
   let returnValue: number | boolean | undefined;
   let runtimeError: string | undefined;

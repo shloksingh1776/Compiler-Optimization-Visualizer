@@ -34,13 +34,20 @@ export enum TokenType {
   INT = 'INT', // the keyword `int`
   FLOAT = 'FLOAT', // the keyword `float`
   BOOL = 'BOOL', // the keyword `bool`
+  VOID = 'VOID', // the keyword `void`
   TRUE = 'TRUE', // boolean literal `true`
   FALSE = 'FALSE', // boolean literal `false`
   PRINT = 'PRINT', // built-in statement `print`
   IF = 'IF', // keyword `if`
   ELSE = 'ELSE', // keyword `else`
   WHILE = 'WHILE', // keyword `while`
+  FOR = 'FOR', // keyword `for'
   RETURN = 'RETURN', // keyword `return`
+  BREAK = 'BREAK', // keyword `break`
+  CONTINUE = 'CONTINUE', // keyword `continue`
+  SWITCH = 'SWITCH', // keyword `switch`
+  CASE = 'CASE', // keyword `case`
+  DEFAULT = 'DEFAULT', // keyword `default`
 
   // --- Logical operators ---
   AND_AND = 'AND_AND', // &&
@@ -134,13 +141,20 @@ export const KEYWORDS: Readonly<Record<string, TokenType>> = {
   int: TokenType.INT,
   float: TokenType.FLOAT,
   bool: TokenType.BOOL,
+  void: TokenType.VOID,
   true: TokenType.TRUE,
   false: TokenType.FALSE,
   print: TokenType.PRINT,
   if: TokenType.IF,
   else: TokenType.ELSE,
   while: TokenType.WHILE,
+  for: TokenType.FOR,
   return: TokenType.RETURN,
+  break: TokenType.BREAK,
+  continue: TokenType.CONTINUE,
+  switch: TokenType.SWITCH,
+  case: TokenType.CASE,
+  default: TokenType.DEFAULT,
 };
 
 /**
@@ -159,13 +173,20 @@ export const TOKEN_DISPLAY: Readonly<Record<TokenType, string>> = {
   [TokenType.EQ]: "'=='",
   [TokenType.NE]: "'!='",
   [TokenType.BOOL]: "'bool'",
+  [TokenType.VOID]: "'void'",
   [TokenType.TRUE]: "'true'",
   [TokenType.FALSE]: "'false'",
   [TokenType.PRINT]: "'print'",
   [TokenType.IF]: "'if'",
   [TokenType.ELSE]: "'else'",
   [TokenType.WHILE]: "'while'",
+  [TokenType.FOR]: "'for'",
   [TokenType.RETURN]: "'return'",
+  [TokenType.BREAK]: "'break'",
+  [TokenType.CONTINUE]: "'continue'",
+  [TokenType.SWITCH]: "'switch'",
+  [TokenType.CASE]: "'case'",
+  [TokenType.DEFAULT]: "'default'",
   [TokenType.AND_AND]: '&&',
   [TokenType.OR_OR]: '||',
   [TokenType.BANG]: '!',
