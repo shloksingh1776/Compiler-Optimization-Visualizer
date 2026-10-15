@@ -4,7 +4,7 @@
  *
  * COMPILER CONCEPT: an optimizer is a sequence of passes over the same
  * intermediate representation, each rewriting it into an equivalent but
- * "better" program. This module fixes that sequence for the four techniques
+ * "better" program. This module fixes that sequence for the six techniques
  * implemented so far:
  *
  *      TAC -> [ CONSTANT -> [ CONSTANT -> [ ALGEBRAIC -> [ CSE -> [ COPY -> [ DEAD CODE
@@ -69,8 +69,8 @@ import { createOptimizationTraceStep } from './trace.ts';
 /**
  * One entry in `OPTIMIZATION_PASSES`: a pass name plus a one-line,
  * user-facing description of what it does. This is descriptive metadata for
- * display purposes only -- it has no effect on `optimize()` itself, which
- * still runs the six pass functions directly, in the fixed order below.
+ * display purposes only; the implementation below defines the execution order
+ * and records the actual intermediate result after each pass.
  */
 export interface OptimizationPassInfo {
   readonly name: string;
@@ -102,7 +102,7 @@ export const OPTIMIZATION_PASSES: readonly OptimizationPassInfo[] = [
   },
   {
     name: 'Copy Propagation',
-    description: "Replaces a TAC copy's target with its current source value when that relationship is still valid.",
+    description: 'Propagates safe variable and TAC-copy aliases when their source values remain unchanged.',
   },
   {
     name: 'Dead Code Elimination',
@@ -112,14 +112,16 @@ export const OPTIMIZATION_PASSES: readonly OptimizationPassInfo[] = [
 ];
 
 
-function materializePrintedConstants(program: TACProgram): TACProgram {
+function materializePrintedConstantsInInstructions(
+  instructions: readonly TACInstruction[],
+  temporaryCount: number,
+): TACInstruction[] {
   const constantEnv = new Map<string, { value: number | boolean; valueType?: import('../types.ts').MiniCType }>();
   const result: TACInstruction[] = [];
-  const temporaryNames = new Set(Array.from({ length: program.temporaryCount }, (_, i) => `t${i + 1}`));
-
+  const temporaryNames = new Set(Array.from({ length: temporaryCount }, (_, i) => `t${i + 1}`));
   const keyForTarget = (target: string) => `${temporaryNames.has(target) ? 'temporary' : 'variable'}:${target}`;
 
-  for (const instruction of program.instructions) {
+  for (const instruction of instructions) {
     switch (instruction.kind) {
       case 'assign': {
         const value = instruction.value.kind === 'constant'
@@ -153,27 +155,43 @@ function materializePrintedConstants(program: TACProgram): TACProgram {
         const value = instruction.operand.kind === 'constant'
           ? instruction.operand
           : constantEnv.get(`${instruction.operand.kind}:${instruction.operand.name}`);
-        if (value && typeof value !== 'undefined') {
-          result.push({ ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } });
-        } else {
-          result.push(instruction);
-        }
+        result.push(value && typeof value !== 'undefined'
+          ? { ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } }
+          : instruction);
+        constantEnv.clear();
         break;
       }
       case 'print': {
         const value = instruction.operand.kind === 'constant'
           ? instruction.operand
           : constantEnv.get(`${instruction.operand.kind}:${instruction.operand.name}`);
-        if (value && typeof value !== 'undefined') {
-          result.push({ ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } });
-        } else {
-          result.push(instruction);
-        }
+        result.push(value && typeof value !== 'undefined'
+          ? { ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } }
+          : instruction);
         break;
       }
       case 'label':
+        // Never carry a linear-scan fact through a branch target or loop back-edge.
+        constantEnv.clear();
+        result.push(instruction);
+        break;
       case 'jump':
+        result.push(instruction);
+        constantEnv.clear();
+        break;
       case 'jumpIfFalse':
+        result.push(instruction);
+        // The current facts remain valid on the fallthrough path; the branch
+        // target's label resets them before that alternate path is processed.
+        break;
+      case 'call':
+        result.push(instruction);
+        constantEnv.clear();
+        break;
+      case 'param':
+      case 'functionBegin':
+      case 'functionEnd':
+        constantEnv.clear();
         result.push(instruction);
         break;
       case 'binary':
@@ -185,9 +203,8 @@ function materializePrintedConstants(program: TACProgram): TACProgram {
     }
   }
 
-  // Remove temporary assignments that became dead once print operands were
-  // materialized as constants. A temporary is safe to remove here only when
-  // no remaining instruction reads it. User-variable assignments remain.
+  // Remove temporary assignments made unnecessary by print/return materialization.
+  // Include every operand-bearing instruction when checking remaining uses.
   let filtered = result.slice();
   let changed = true;
   while (changed) {
@@ -198,7 +215,7 @@ function materializePrintedConstants(program: TACProgram): TACProgram {
         : instruction.kind === 'copy' ? [instruction.source]
         : instruction.kind === 'binary' ? [instruction.left, instruction.right]
         : instruction.kind === 'unary' ? [instruction.operand]
-        : instruction.kind === 'print' ? [instruction.operand]
+        : instruction.kind === 'print' || instruction.kind === 'return' ? [instruction.operand]
         : instruction.kind === 'jumpIfFalse' ? [instruction.condition]
         : instruction.kind === 'call' ? instruction.args
         : [];
@@ -216,7 +233,37 @@ function materializePrintedConstants(program: TACProgram): TACProgram {
     filtered = next;
   }
 
-  return { instructions: filtered, temporaryCount: program.temporaryCount, functions: program.functions };
+  return filtered;
+}
+
+function materializePrintedConstants(program: TACProgram): TACProgram {
+  const instructions = program.instructions.some((instruction) => instruction.kind === 'print')
+    ? materializePrintedConstantsInInstructions(program.instructions, program.temporaryCount)
+    : program.instructions;
+  const functions = Object.fromEntries(
+    Object.entries(program.functions ?? {}).map(([name, fn]) => [name, {
+      ...fn,
+      instructions: fn.instructions.some((instruction) => instruction.kind === 'print')
+        ? materializePrintedConstantsInInstructions(fn.instructions, program.temporaryCount)
+        : fn.instructions,
+    }]),
+  );
+  return { ...program, instructions, functions };
+}
+
+/** Run a pass over main TAC and independently over each function body. */
+function applyPassToEveryBody(
+  program: TACProgram,
+  pass: (input: TACProgram) => TACProgram,
+): TACProgram {
+  const mainResult = pass({ instructions: program.instructions, temporaryCount: program.temporaryCount });
+  const functions = Object.fromEntries(
+    Object.entries(program.functions ?? {}).map(([name, fn]) => {
+      const result = pass({ instructions: fn.instructions, temporaryCount: program.temporaryCount });
+      return [name, { ...fn, instructions: result.instructions }];
+    }),
+  );
+  return { ...program, instructions: mainResult.instructions, functions };
 }
 
 /**
@@ -237,156 +284,95 @@ export interface OptimizationResult {
 }
 
 /**
- * Run the existing optimization pipeline and capture the TAC after every
- * pass. The optimization algorithms and their ordering are intentionally the
- * same as `optimize()` has always used; this function only records snapshots
- * for the visualizer.
+ * Run the fixed six-pass optimization pipeline and capture the actual TAC
+ * after every pass for both the main program and independent function bodies.
  */
 export function optimizeWithTrace(program: TACProgram): OptimizationResult {
-  const hasMainControlFlow = program.instructions.some((instruction) =>
-    instruction.kind === 'label' ||
-    instruction.kind === 'jump' ||
-    instruction.kind === 'jumpIfFalse' ||
-    instruction.kind === 'call'
-  );
-
   const trace: OptimizationTraceStep[] = [
     createOptimizationTraceStep('original', 'Original TAC', 'TAC generated before optimization begins.', program, false),
   ];
 
-  const optimizeFunctionBodiesAtCSE = (input: TACProgram): TACProgram => ({
-    ...input,
-    functions: Object.fromEntries(
-      Object.entries(input.functions ?? {}).map(([name, fn]) => {
-        const afterCSE = commonSubexpressionEliminationInstructions(fn.instructions);
-        return [name, { ...fn, instructions: afterCSE }];
-      })
-    ),
-  });
+  const afterPropagation = applyPassToEveryBody(program, constantPropagation);
+  trace.push(createOptimizationTraceStep(
+    'constant-propagation',
+    OPTIMIZATION_PASSES[0]!.name,
+    OPTIMIZATION_PASSES[0]!.description,
+    afterPropagation,
+    true,
+    'Applied independently to the main program and every function. Constant facts are reset at labels, jumps, conditional branches, calls, and function boundaries so facts are not carried unsafely between control-flow paths.',
+  ));
 
-  const optimizeFunctionBodiesAtCopy = (input: TACProgram): TACProgram => ({
-    ...input,
-    functions: Object.fromEntries(
-      Object.entries(input.functions ?? {}).map(([name, fn]) => ({
-        name,
-        fn: { ...fn, instructions: copyPropagationInstructions(fn.instructions) },
-      })).map(({ name, fn }) => [name, fn])
-    ),
-  });
+  const afterFolding = applyPassToEveryBody(afterPropagation, constantFolding);
+  trace.push(createOptimizationTraceStep(
+    'constant-folding',
+    OPTIMIZATION_PASSES[1]!.name,
+    OPTIMIZATION_PASSES[1]!.description,
+    afterFolding,
+    true,
+    'Applied instruction-by-instruction to the main program and every function; only expressions with literal constant operands are folded.',
+  ));
 
-  if (hasMainControlFlow) {
-    const unchanged = (name: string, description: string, current: TACProgram, note: string) => {
-      const pass = OPTIMIZATION_PASSES.find((item) => item.name === name);
-      trace.push(createOptimizationTraceStep(name, pass?.name ?? name, description, current, false, note));
-    };
-
-    unchanged(
-      OPTIMIZATION_PASSES[0]!.name,
-      OPTIMIZATION_PASSES[0]!.description,
-      program,
-      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
-    );
-    unchanged(
-      OPTIMIZATION_PASSES[1]!.name,
-      OPTIMIZATION_PASSES[1]!.description,
-      program,
-      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
-    );
-    unchanged(
-      OPTIMIZATION_PASSES[2]!.name,
-      OPTIMIZATION_PASSES[2]!.description,
-      program,
-      'Skipped for the main program because the existing optimizer handles main-program control flow conservatively. Function bodies also remain unchanged until CSE and copy propagation.'
-    );
-
-    const afterCSE: TACProgram = {
-      ...commonSubexpressionElimination(program),
-      functions: optimizeFunctionBodiesAtCSE(program).functions,
-    };
-    trace.push(createOptimizationTraceStep(
-      'cse',
-      OPTIMIZATION_PASSES[3]!.name,
-      OPTIMIZATION_PASSES[3]!.description,
-      afterCSE,
-    ));
-
-    const afterCopyPropagation: TACProgram = {
-      ...copyPropagation(afterCSE),
-      functions: optimizeFunctionBodiesAtCopy(afterCSE).functions,
-    };
-    trace.push(createOptimizationTraceStep(
-      'copy-propagation',
-      OPTIMIZATION_PASSES[4]!.name,
-      OPTIMIZATION_PASSES[4]!.description,
-      afterCopyPropagation,
-    ));
-
-    trace.push(createOptimizationTraceStep(
-      'dead-code-elimination',
-      OPTIMIZATION_PASSES[5]!.name,
-      OPTIMIZATION_PASSES[5]!.description,
-      afterCopyPropagation,
-      false,
-      'Skipped for the main program because the existing optimizer keeps control-flow TAC conservative. The existing pipeline does not run DCE on function bodies.'
-    ));
-    trace.push(createOptimizationTraceStep(
-      'final',
-      'Final Optimized TAC',
-      'The exact TAC returned by the compiler after the existing optimization work.',
-      afterCopyPropagation,
-    ));
-
-    return {
-      program: afterCopyPropagation,
-      trace: { steps: trace },
-    };
-  }
-
-  const afterPropagation: TACProgram = {
-    ...constantPropagation(program),
-    functions: program.functions,
-  };
-  trace.push(createOptimizationTraceStep('constant-propagation', OPTIMIZATION_PASSES[0]!.name, OPTIMIZATION_PASSES[0]!.description, afterPropagation, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
-
-  const afterFolding: TACProgram = {
-    ...constantFolding(afterPropagation),
-    functions: afterPropagation.functions,
-  };
-  trace.push(createOptimizationTraceStep('constant-folding', OPTIMIZATION_PASSES[1]!.name, OPTIMIZATION_PASSES[1]!.description, afterFolding, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
-
-  const afterSimplification: TACProgram = {
-    ...algebraicSimplification(afterFolding),
-    functions: afterFolding.functions,
-  };
-  trace.push(createOptimizationTraceStep('algebraic-simplification', OPTIMIZATION_PASSES[2]!.name, OPTIMIZATION_PASSES[2]!.description, afterSimplification, true, 'Applied to the main program only; function bodies remain unchanged in this pass.'));
+  const afterSimplification = applyPassToEveryBody(afterFolding, algebraicSimplification);
+  trace.push(createOptimizationTraceStep(
+    'algebraic-simplification',
+    OPTIMIZATION_PASSES[2]!.name,
+    OPTIMIZATION_PASSES[2]!.description,
+    afterSimplification,
+    true,
+    'Applied to the main program and every function. Only the existing approved identities are used.',
+  ));
 
   const afterCSE: TACProgram = {
     ...commonSubexpressionElimination(afterSimplification),
-    functions: optimizeFunctionBodiesAtCSE(afterSimplification).functions,
+    functions: Object.fromEntries(
+      Object.entries(afterSimplification.functions ?? {}).map(([name, fn]) => [name, {
+        ...fn,
+        instructions: commonSubexpressionEliminationInstructions(fn.instructions),
+      }]),
+    ),
   };
-  trace.push(createOptimizationTraceStep('cse', OPTIMIZATION_PASSES[3]!.name, OPTIMIZATION_PASSES[3]!.description, afterCSE));
+  trace.push(createOptimizationTraceStep(
+    'cse',
+    OPTIMIZATION_PASSES[3]!.name,
+    OPTIMIZATION_PASSES[3]!.description,
+    afterCSE,
+    true,
+    'Applied independently to the main program and every function. CSE clears its expression cache at control-flow boundaries and calls.',
+  ));
 
   const afterCopyPropagation: TACProgram = {
     ...copyPropagation(afterCSE),
-    functions: optimizeFunctionBodiesAtCopy(afterCSE).functions,
+    functions: Object.fromEntries(
+      Object.entries(afterCSE.functions ?? {}).map(([name, fn]) => [name, {
+        ...fn,
+        instructions: copyPropagationInstructions(fn.instructions),
+      }]),
+    ),
   };
-  trace.push(createOptimizationTraceStep('copy-propagation', OPTIMIZATION_PASSES[4]!.name, OPTIMIZATION_PASSES[4]!.description, afterCopyPropagation));
+  trace.push(createOptimizationTraceStep(
+    'copy-propagation',
+    OPTIMIZATION_PASSES[4]!.name,
+    OPTIMIZATION_PASSES[4]!.description,
+    afterCopyPropagation,
+    true,
+    'Applied independently to the main program and every function. Copy facts are cleared at calls and control-flow boundaries.',
+  ));
 
-  const afterDeadCodeElimination = deadCodeElimination(afterCopyPropagation);
-  const afterDCE: TACProgram = {
-    ...afterDeadCodeElimination,
-    functions: afterCopyPropagation.functions,
-  };
-  trace.push(createOptimizationTraceStep('dead-code-elimination', OPTIMIZATION_PASSES[5]!.name, OPTIMIZATION_PASSES[5]!.description, afterDCE, true, 'Applied to the main program only; the existing optimizer does not run DCE on function bodies.'));
+  const afterDCE = deadCodeElimination(afterCopyPropagation);
+  trace.push(createOptimizationTraceStep(
+    'dead-code-elimination',
+    OPTIMIZATION_PASSES[5]!.name,
+    OPTIMIZATION_PASSES[5]!.description,
+    afterDCE,
+    true,
+    'Applied to the main program and every function. Control-flow bodies use basic-block liveness across branch and jump successors; calls, prints, returns, parameters, and control-flow instructions are preserved.',
+  ));
 
-  const materialized = afterDCE.instructions.some((instruction) => instruction.kind === 'print')
-    ? materializePrintedConstants(afterDCE)
-    : afterDCE;
-
+  const materialized = materializePrintedConstants(afterDCE);
   trace.push(createOptimizationTraceStep(
     'final',
     'Final Optimized TAC',
-    'The exact TAC returned by the compiler after all existing optimization work and print-value materialization.',
+    'The exact TAC returned by the compiler after all six optimization passes and final print/return constant materialization.',
     materialized,
   ));
 

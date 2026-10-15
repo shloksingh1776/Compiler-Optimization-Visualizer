@@ -192,16 +192,19 @@ the optimizer something real to work on.
 ## Optimization
 
 ```
-TAC -> Constant Propagation -> Constant Folding -> Algebraic Simplification -> Dead Code Elimination -> Optimized TAC
+TAC -> Constant Propagation -> Constant Folding -> Algebraic Simplification -> CSE -> Copy Propagation -> Dead Code Elimination -> Optimized TAC
 ```
 
 Each pass runs **exactly once**, in this fixed order, with no fixpoint iteration.
 
-**Constant propagation** tracks `name -> known constant value` in a single
-forward scan (straight-line code has no merge points, so one pass is exact)
-and substitutes a known value wherever a variable or temporary is read. It
-never evaluates an operation -- `t1 = a + b` with `a` and `b` both known
-becomes `t1 = 10 + 20`, not `t1 = 30`.
+**Constant propagation** tracks `name -> known constant value` within each
+basic block and substitutes a known value wherever a variable or temporary
+is read. It resets facts at labels and unconditional jumps, and after calls;
+labels therefore do not inherit constants from another branch or loop
+iteration. At a conditional branch, the facts remain available only along the
+linear fallthrough path; its target label resets them. The pass never evaluates
+an operation -- `t1 = a + b` with `a` and `b` both known becomes `t1 = 10 + 20`,
+not `t1 = 30`.
 
 **Constant folding** evaluates a `binary` or `unary` instruction into an
 `assign` exactly when every operand it needs is already a literal constant --
@@ -218,15 +221,16 @@ matching an identity meant for the genuinely non-constant case. Unsafe-looking
 identities are deliberately absent -- `0 / x -> 0` and `x / x -> 1` are both
 wrong when `x` is zero, so neither is implemented.
 
-**Dead code elimination** removes an instruction when its value is never
-subsequently needed, using one backward pass over the straight-line TAC (no
-CFG, no basic blocks -- MiniC v1 has no branches, so one pass is exact). A
-declared variable's FINAL write is always treated as observable, even with no
-later TAC read, since MiniC has no `print`/`return` to make anything else
-observable; an EARLIER write that is overwritten before use is genuinely dead
-and is removed. Temporary names are identified from `TACProgram.temporaryCount`
-(exactly `t1..t<count>`), never guessed from spelling, and DCE consults no
-symbol-table information at all.
+**Dead code elimination** uses backwards liveness. For control-flow TAC it
+builds basic blocks, connects jump/branch/return successors, and iterates
+liveness to a fixpoint before removing dead computations. Calls, prints,
+returns, parameter bindings, and control-flow instructions are preserved. In
+the main program, a declared variable's final write remains observable for
+compatibility with the visualizer's variable-state model. Function-local final
+assignments are not protected solely because they are last: they may be
+removed when no return, print, call, or later computation needs them.
+Temporary names are identified from `TACProgram.temporaryCount` (exactly
+`t1..t<count>`), never guessed from spelling.
 
 **Type-aware optimization:** `int` and `float` values carry their numeric type through TAC and the optimization passes. Constant propagation preserves the type of propagated values and applies the destination type for `int -> float` assignments. Constant folding uses floating-point division for `float` expressions while retaining integer division for `int` expressions. Algebraic simplification preserves the target type when replacing an operation with a value, and dead code elimination keeps the original typed instructions intact. Division-by-zero protection remains active for both numeric types.
 
@@ -377,11 +381,12 @@ conditional jumps (`ifFalse ... goto`) and unconditional jumps (`goto ...`). The
 interpreter follows those jumps and executes only the selected branch, so
 `print()` inside an `if` produces the actual selected value in Program Output.
 
-The existing straight-line optimization passes are intentionally not applied
-across branch boundaries yet: doing so would require control-flow-aware dataflow
-analysis. Branch programs therefore retain structurally safe TAC until a later
-control-flow optimization stage is introduced. The existing optimizations remain
-unchanged for ordinary straight-line programs.
+Optimization passes now run on control-flow programs using conservative
+basic-block boundaries and control-flow-aware liveness. Constant propagation
+never carries facts into a branch target or through a call; CSE and copy
+propagation clear their caches at control-flow boundaries. DCE computes liveness
+across branch and jump successors rather than assuming straight-line execution.
+See Stage 24 below for the full coverage changes.
 
 
 ## Stage 7: Return Statements
@@ -396,20 +401,20 @@ MiniC now supports typed user-defined functions with parameters, local variables
 
 ## Stage 8 presentation enhancement
 
-The visualizer now exposes the function-level intermediate representations and semantic symbols already produced by the Stage 8 compiler. The TAC section shows the main program TAC plus each function body separately. The symbol-table section keeps the original global symbol list backward-compatible and adds a local-symbol table for each function, including its parameters and local variables. CSE is also applied independently inside each function body. Function calls and control-flow boundaries remain conservative CSE barriers.
+The visualizer now exposes the function-level intermediate representations and semantic symbols already produced by the Stage 8 compiler. The TAC section shows the main program TAC plus each function body separately. The symbol-table section keeps the original global symbol list backward-compatible and adds a local-symbol table for each function, including its parameters and local variables. Each optimization pass is applied independently to every function body as well as the main program. Function calls and control-flow boundaries remain conservative CSE barriers.
 
 ## Stage 9 — Common Subexpression Elimination
 
 The optimizer now includes conservative local Common Subexpression Elimination (CSE). Repeated binary arithmetic expressions such as `a + b` are computed once and later uses reuse the earlier result when the operands have not changed. Expression identity is structural and operand order is significant, so `a + b` and `b + a` are not merged. Calls and control-flow boundaries clear the CSE cache. Function bodies are optimized independently with the same local CSE pass.
 
-The optimization order is now: Constant Propagation → Constant Folding → Algebraic Simplification → Common Subexpression Elimination → Dead Code Elimination.
+The full optimization order is: Constant Propagation → Constant Folding → Algebraic Simplification → Common Subexpression Elimination → Copy Propagation → Dead Code Elimination.
 
-Stage 9 does not implement global CFG CSE, SSA, loop-aware CSE, alias analysis, or interprocedural CSE.
+Stage 9 does not implement global CFG CSE, SSA, loop-aware CSE, alias analysis, or interprocedural CSE. The later Stage 24 work adds CFG-aware liveness for DCE but does not introduce global/interprocedural CSE.
 
 
 ## Stage 12: While Loops
 
-Stage 12 adds basic `while (condition) { ... }` loop support. The loop condition must be a `bool` expression. Three-address code uses a condition label, a conditional exit jump, a backward jump to repeat the loop, and an exit label. Nested loops, `if/else`, `print`, `return`, and function calls are supported inside loop bodies. Optimization remains conservative around control-flow boundaries.
+Stage 12 adds basic `while (condition) { ... }` loop support. The loop condition must be a `bool` expression. Three-address code uses a condition label, a conditional exit jump, a backward jump to repeat the loop, and an exit label. Nested loops, `if/else`, `print`, `return`, and function calls are supported inside loop bodies. Optimization uses conservative control-flow barriers for local propagation and CFG-aware liveness for DCE.
 
 ## Stage 13: Logical Operators
 
@@ -417,7 +422,7 @@ Stage 13 adds the boolean logical operators `&&`, `||`, and `!`. The parser give
 
 `&&` and `||` are translated using labels and conditional jumps rather than ordinary eager binary TAC. This preserves short-circuit semantics: the right-hand side of `false && rhs` is not evaluated, and the right-hand side of `true || rhs` is not evaluated. Unary `!` is represented directly as a typed TAC unary operation and can be constant-folded when its operand is known.
 
-Stage 13 does not add another optimization pass. Existing optimization passes remain conservative around the control-flow generated for short-circuit expressions.
+Stage 13 does not add another optimization pass. Constant propagation and local expression/copy caches respect the control-flow generated for short-circuit expressions; DCE accounts for the generated branch edges.
 
 
 ## Stage 14 — Ternary Operator
@@ -436,4 +441,15 @@ The MiniC subset supports C-style `for (initialization; condition; update) { ...
 
 ## Stage 21 — Pass-by-Pass Optimization Visualization
 
-The optimization section now lets users select the original TAC, each existing optimization pass, and the final optimized TAC. Every snapshot is generated by the actual optimizer pipeline; the visualization does not synthesize illustrative TAC. The main program and function bodies remain visible in each snapshot. Where the current optimizer deliberately skips passes around control flow, the UI marks those passes as not applied and explains the limitation. Function bodies continue to receive the existing CSE and copy-propagation treatment only; the optimization algorithms and order are not expanded by this stage.
+The optimization section lets users select the original TAC, each optimization pass, and the final optimized TAC. Every snapshot is generated by the actual optimizer pipeline; the visualization does not synthesize illustrative TAC. The main program and function bodies remain visible in each snapshot. Stage 24 extends all six passes to function bodies and control-flow TAC where safe, and the trace records which passes actually ran.
+
+
+## Stage 24 — Complete Optimization Coverage
+
+Stage 24 applies all six existing optimization techniques to the main program and to each function body independently: Constant Propagation, Constant Folding, Algebraic Simplification, Common Subexpression Elimination, Copy Propagation, and Dead Code Elimination.
+
+Constant propagation keeps facts local to safe control-flow regions, resetting at labels, unconditional jumps, and calls. Its facts remain available along a conditional branch's fallthrough path, while the target label starts with a clean environment. Constant folding and algebraic simplification run instruction-by-instruction, as each rewrite is safe when its operands meet the pass's requirements. CSE and Copy Propagation retain their existing call and control-flow barriers. Copy Propagation now also tracks same-type variable-to-variable assignments (such as `a = n`, `b = a`, `c = b`) inside each body. It uses parameter and assignment target type metadata to avoid treating type-changing assignments as aliases; DCE removes alias assignments that become unused afterward.
+
+DCE now builds basic blocks and performs liveness analysis across jump, branch, and return edges. It removes unused temporary computations in functions and can remove unused local-variable assignments. Calls, prints, returns, parameter bindings, and control-flow instructions are retained. The main program's final variable writes remain preserved for compatibility with the visualizer's existing state model.
+
+The pass-by-pass trace now shows the actual main TAC and function-body TAC after every pass, and no pass is marked skipped merely because the main program contains a branch or loop. This stage does not add new MiniC language features, global/interprocedural CSE, SSA, register allocation, or a step-by-step execution debugger.

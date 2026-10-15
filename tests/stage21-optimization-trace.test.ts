@@ -58,7 +58,7 @@ describe('Enhancement 1: pass-by-pass optimization trace', () => {
     expect(original.instructions).not.toEqual(cse.instructions);
   });
 
-  it('marks conservative control-flow passes as not applied without changing final behavior', () => {
+  it('runs every optimization pass on control-flow TAC without changing final behavior', () => {
     const result = compile(`
       int i = 0;
       while (i < 2) {
@@ -67,14 +67,12 @@ describe('Enhancement 1: pass-by-pass optimization trace', () => {
       }
     `);
     const steps = result.optimizationTrace!.steps;
-    expect(steps.find((step) => step.name === 'Constant Propagation')!.applied).toBe(false);
-    expect(steps.find((step) => step.name === 'Constant Folding')!.applied).toBe(false);
-    expect(steps.find((step) => step.name === 'Algebraic Simplification')!.applied).toBe(false);
-    expect(steps.find((step) => step.name === 'Dead Code Elimination')!.applied).toBe(false);
-  expect(steps.find((step) => step.name === 'Common Subexpression Elimination')!.applied).toBe(true);
-  expect(steps.find((step) => step.name === 'Copy Propagation')!.applied).toBe(true);
+    expect(steps.find((step) => step.name === 'Constant Propagation')!.applied).toBe(true);
+    expect(steps.find((step) => step.name === 'Constant Folding')!.applied).toBe(true);
+    expect(steps.find((step) => step.name === 'Algebraic Simplification')!.applied).toBe(true);
     expect(steps.find((step) => step.name === 'Common Subexpression Elimination')!.applied).toBe(true);
     expect(steps.find((step) => step.name === 'Copy Propagation')!.applied).toBe(true);
+    expect(steps.find((step) => step.name === 'Dead Code Elimination')!.applied).toBe(true);
     expect(steps.at(-1)!.tac).toEqual(result.optimizedTac);
     expect(result.output).toEqual(['0', '1']);
   });
@@ -92,7 +90,7 @@ describe('Enhancement 1: pass-by-pass optimization trace', () => {
   });
 });
 
-it('captures switch/case TAC while marking conservative control-flow passes as skipped', () => {
+it('captures switch/case TAC while running all control-flow-safe optimization passes', () => {
   const result = compile(`
     int n = 2;
     switch (n) {
@@ -106,8 +104,10 @@ it('captures switch/case TAC while marking conservative control-flow passes as s
   expect(result.optimizationTrace).not.toBeNull();
   const steps = result.optimizationTrace!.steps;
   expect(steps.at(-1)!.tac).toEqual(result.optimizedTac);
-  expect(steps.find((step) => step.name === 'Constant Propagation')!.applied).toBe(false);
-  expect(steps.find((step) => step.name === 'Dead Code Elimination')!.applied).toBe(false);
+  expect(steps.find((step) => step.name === 'Constant Propagation')!.applied).toBe(true);
+  expect(steps.find((step) => step.name === 'Constant Folding')!.applied).toBe(true);
+  expect(steps.find((step) => step.name === 'Algebraic Simplification')!.applied).toBe(true);
+  expect(steps.find((step) => step.name === 'Dead Code Elimination')!.applied).toBe(true);
   expect(steps.find((step) => step.name === 'Common Subexpression Elimination')!.applied).toBe(true);
   expect(steps.find((step) => step.name === 'Copy Propagation')!.applied).toBe(true);
   expect(steps.find((step) => step.name === 'Original TAC')!.tac.instructions.some((i) => i.kind === 'jumpIfFalse')).toBe(true);

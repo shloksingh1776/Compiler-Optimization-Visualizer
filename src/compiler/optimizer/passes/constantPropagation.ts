@@ -21,12 +21,14 @@
  *
  * THE ENVIRONMENT
  *
- * A single forward scan carries `env: name -> known constant value`. Because
- * MiniC v1 is straight-line code (no `if`, no `while`, no loops), there is
- * exactly one path through the program and therefore no merge point where
- * two different environments would need to be reconciled -- the textbook
- * complication of dataflow analysis simply does not arise here. One
- * left-to-right pass is exact, not an approximation.
+ * A forward scan carries `env: name -> known constant value` within a basic
+ * block. Facts are reset at labels and unconditional jumps, and after calls;
+ * a conditional branch keeps facts on its fallthrough path, while its target
+ * label starts with an empty environment. This deliberately conservative
+ * boundary handling avoids carrying a value from one branch or loop iteration
+ * into another without requiring a global dataflow solver. It can miss an
+ * optimization at a merge point, but it will not substitute a stale fact from
+ * a different control-flow path.
  *
  *   - `x = <constant>`               -->  env[x] = that constant
  *   - `x = <name known in env>`      -->  env[x] = the known value (a copy
@@ -191,20 +193,35 @@ export function constantPropagation(program: TACProgram): TACProgram {
 
       case 'call': {
         const args = instruction.args.map(a => substitute(a, env));
-        env.delete(`temporary:${instruction.target}`);
+        // A call may change values visible to the caller. Preserve substitutions
+        // in its arguments, then discard facts that may no longer be valid.
+        env.clear();
         instructions.push(args.every((a,i)=>a===instruction.args[i]) ? instruction : { ...instruction, args });
         break;
       }
       case 'param':
+        // A function parameter establishes an incoming value, not a constant
+        // inherited from any preceding hand-built TAC.
+        env.clear();
+        instructions.push(instruction);
+        break;
       case 'functionBegin':
       case 'functionEnd':
       case 'label':
       case 'jump':
+        // Do not carry facts across a control-flow edge. This keeps the pass
+        // safe for branches and loop back-edges without needing a CFG solver
+        // for constant propagation.
+        env.clear();
         instructions.push(instruction);
         break;
       case 'jumpIfFalse': {
+        // The condition can use facts from the current basic block, but the
+        // next instruction may be on a different path after this branch.
         const condition = substitute(instruction.condition, env);
         instructions.push(condition === instruction.condition ? instruction : { ...instruction, condition });
+        // Facts remain valid along the linear fallthrough path. Any alternate
+        // entry through the branch target is reset by that target's label.
         break;
       }
     }
