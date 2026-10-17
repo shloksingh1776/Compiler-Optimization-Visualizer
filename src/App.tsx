@@ -21,7 +21,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
-import { compile, OPTIMIZATION_PASSES, type FunctionDecl } from './compiler/index.ts';
+import { compile, OPTIMIZATION_PASSES, type CompilerError, type FunctionDecl, type Token } from './compiler/index.ts';
 import AstView from './components/AstView.tsx';
 import SymbolTableView from './components/SymbolTableView.tsx';
 import OptimizationTraceView from './components/OptimizationTraceView.tsx';
@@ -29,6 +29,8 @@ import OptimizationPanel from './components/OptimizationPanel.tsx';
 import ErrorPanel from './components/ErrorPanel.tsx';
 import ExampleSelector from './components/ExampleSelector.tsx';
 import CodeEditor from './components/CodeEditor.tsx';
+import TokenInspector from './components/TokenInspector.tsx';
+import { getDiagnosticSourceRange } from './components/diagnosticUtils.ts';
 import { SAMPLES, DEFAULT_SAMPLE, type Sample } from './examples/samples.ts';
 
 /** Section wrapper, so every panel is titled and spaced the same way. */
@@ -54,9 +56,30 @@ function Section({
 export default function App() {
   const [source, setSource] = useState<string>(DEFAULT_SAMPLE.source);
   const [loadedSampleId, setLoadedSampleId] = useState<string>(DEFAULT_SAMPLE.id);
+  const [selectedToken, setSelectedToken] = useState<Token | null>(null);
+  const [diagnosticHighlight, setDiagnosticHighlight] = useState<{ start: number; end: number } | null>(null);
+  const [sourceNavigationRequestId, setSourceNavigationRequestId] = useState(0);
+  const handleSourceChange = (nextSource: string) => {
+    setSource(nextSource);
+    setSelectedToken(null);
+    setDiagnosticHighlight(null);
+  };
+  const handleTokenSelection = (token: Token | null) => {
+    setSelectedToken(token);
+    setDiagnosticHighlight(null);
+    if (token) setSourceNavigationRequestId((requestId) => requestId + 1);
+  };
+  const handleDiagnosticSelection = (error: CompilerError) => {
+    const sourceRange = getDiagnosticSourceRange(error, source.length);
+    setDiagnosticHighlight(sourceRange);
+    setSelectedToken(null);
+    setSourceNavigationRequestId((requestId) => requestId + 1);
+  };
   const loadSample = (sample: Sample) => {
     setSource(sample.source);
     setLoadedSampleId(sample.id);
+    setSelectedToken(null);
+    setDiagnosticHighlight(null);
   };
 
   // The whole compiler runs here, and only when the source actually changes.
@@ -108,44 +131,29 @@ export default function App() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* ---------------- 1. Source ---------------- */}
         <Section number={1} title="Source Code">
-          <CodeEditor source={source} onChange={setSource} ariaLabel="MiniC v1 source code" />
+          <CodeEditor
+            source={source}
+            onChange={handleSourceChange}
+            ariaLabel="MiniC v1 source code"
+            tokenHighlight={selectedToken ? { start: selectedToken.start, end: selectedToken.end } : null}
+            diagnosticHighlight={diagnosticHighlight}
+            navigationRequestId={sourceNavigationRequestId}
+          />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
             <p>{lineCount} {lineCount === 1 ? 'line' : 'lines'}, {source.length} characters</p>
             <p>Tab: indent · Enter: continue indentation · Matching brackets highlighted</p>
           </div>
         </Section>
 
-        {/* ---------------- 2. Tokens ---------------- */}
-        <Section number={2} title={`Tokens (${tokens.length})`}>
-          <div className="h-72 overflow-auto rounded border border-slate-700 bg-slate-900">
-            <table className="w-full text-left font-mono text-xs">
-              <thead className="sticky top-0 bg-slate-800 text-slate-300">
-                <tr>
-                  <th className="px-2 py-1">#</th>
-                  <th className="px-2 py-1">Type</th>
-                  <th className="px-2 py-1">Lexeme</th>
-                  <th className="px-2 py-1">Value</th>
-                  <th className="px-2 py-1">Ln:Col</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tokens.map((token, index) => (
-                  <tr key={index} className="border-t border-slate-800 hover:bg-slate-800">
-                    <td className="px-2 py-1 text-slate-500">{index}</td>
-                    <td className="px-2 py-1 text-sky-300">{token.type}</td>
-                    <td className="px-2 py-1">{token.lexeme}</td>
-                    <td className="px-2 py-1 text-amber-300">{token.value ?? ''}</td>
-                    <td className="px-2 py-1 text-slate-500">
-                      {token.line}:{token.column}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Lexical analysis breaks the source into tokens &mdash; the smallest meaningful pieces
-            of the program. Status: {stageStatus.lexical}.
+        {/* ---------------- 2. Interactive Token Inspector ---------------- */}
+        <Section number={2} title={`Interactive Token Inspector (${tokens.length})`}>
+          <TokenInspector
+            tokens={tokens}
+            selectedToken={selectedToken}
+            onSelectToken={handleTokenSelection}
+          />
+          <p className="mt-2 text-xs text-slate-500">
+            Lexemes, token types, values, line/column positions, and source offsets come from the actual compiler lexer. Select a lexeme to navigate to and highlight its exact source span. Status: {stageStatus.lexical}.
           </p>
         </Section>
       </div>
@@ -228,11 +236,16 @@ export default function App() {
           syntaxErrors={syntaxErrors}
           semanticErrors={semanticErrors}
           divisionByZeroErrors={divisionByZeroErrors}
+          runtimeError={runtimeError}
+          sourceLength={source.length}
+          onSelectDiagnostic={handleDiagnosticSelection}
         />
         <p className="mt-2 text-xs text-slate-500">
           {hasErrors
-            ? 'A compiler error stops every later stage: generating TAC or optimizing a program that is not valid would only produce misleading results, so nothing after the failing stage runs.'
-            : 'Every stage above ran to completion, from lexical analysis through optimization.'}
+            ? 'A compiler error stops later phases. Select Go to source on a located diagnostic to navigate to the reported source span.'
+            : runtimeError
+              ? 'Compilation and optimization completed, but program execution reported a runtime error.'
+              : 'Every compiler stage above ran to completion, from lexical analysis through optimization.'}
         </p>
       </Section>
     </div>

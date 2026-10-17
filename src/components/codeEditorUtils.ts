@@ -264,3 +264,114 @@ export function getMiniCSyntaxSegments(
 
   return segments;
 }
+
+/**
+ * Splits syntax segments at a selected token range so the editor's display
+ * layer can highlight the exact lexer-provided source span without changing
+ * a single source character.
+ */
+export function getTokenHighlightedSegments(
+  segments: readonly SyntaxSegment[],
+  selectedRange: { start: number; end: number } | null,
+  highlightClassName = 'syntax-token-selected',
+): SyntaxSegment[] {
+  if (!selectedRange || selectedRange.end <= selectedRange.start) return [...segments];
+
+  const highlighted: SyntaxSegment[] = [];
+  for (const segment of segments) {
+    const overlapStart = Math.max(segment.start, selectedRange.start);
+    const overlapEnd = Math.min(segment.end, selectedRange.end);
+
+    if (overlapStart >= overlapEnd) {
+      highlighted.push(segment);
+      continue;
+    }
+
+    if (segment.start < overlapStart) {
+      highlighted.push({
+        text: segment.text.slice(0, overlapStart - segment.start),
+        className: segment.className,
+        start: segment.start,
+        end: overlapStart,
+      });
+    }
+
+    highlighted.push({
+      text: segment.text.slice(overlapStart - segment.start, overlapEnd - segment.start),
+      className: `${segment.className} ${highlightClassName}`, 
+      start: overlapStart,
+      end: overlapEnd,
+    });
+
+    if (overlapEnd < segment.end) {
+      highlighted.push({
+        text: segment.text.slice(overlapEnd - segment.start),
+        className: segment.className,
+        start: overlapEnd,
+        end: segment.end,
+      });
+    }
+  }
+
+  return highlighted;
+}
+
+
+export interface SourceNavigationRange {
+  start: number;
+  end: number;
+}
+
+export interface SourceNavigationResult extends SourceNavigationRange {
+  scrollTop: number;
+  scrollLeft: number;
+}
+
+/**
+ * Navigate to a genuine source span in the editor.
+ *
+ * `scrollIntoView` moves the document viewport back to the editor when the
+ * user clicked a diagnostic near the bottom of the page. The textarea is then
+ * focused without overriding that document scroll, and its own scroll position
+ * is adjusted so the reported source line is visible inside the editor.
+ */
+export function navigateEditorToSourceRange(
+  textarea: HTMLTextAreaElement,
+  source: string,
+  range: SourceNavigationRange,
+): SourceNavigationResult {
+  const start = Math.max(0, Math.min(range.start, source.length));
+  const end = Math.max(start, Math.min(range.end, source.length));
+
+  textarea.closest('.code-editor')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+    inline: 'nearest',
+  });
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(start, end);
+
+  const lineIndex = source.slice(0, start).split('\n').length - 1;
+  const lineHeight = 24;
+  const verticalPadding = 12;
+  const lineTop = verticalPadding + lineIndex * lineHeight;
+  const currentTop = textarea.scrollTop;
+  const visibleBottom = currentTop + textarea.clientHeight;
+  let targetTop = currentTop;
+
+  if (lineTop < currentTop + verticalPadding) {
+    targetTop = lineTop - verticalPadding;
+  } else if (lineTop + lineHeight > visibleBottom - verticalPadding) {
+    targetTop = lineTop + lineHeight - textarea.clientHeight + verticalPadding;
+  }
+
+  const maxScrollTop = Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+  textarea.scrollTop = Math.max(0, Math.min(targetTop, maxScrollTop));
+
+  return {
+    start,
+    end,
+    scrollTop: textarea.scrollTop,
+    scrollLeft: textarea.scrollLeft,
+  };
+}

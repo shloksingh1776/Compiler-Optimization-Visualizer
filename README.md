@@ -453,3 +453,28 @@ Constant propagation keeps facts local to safe control-flow regions, resetting a
 DCE now builds basic blocks and performs liveness analysis across jump, branch, and return edges. It removes unused temporary computations in functions and can remove unused local-variable assignments. Calls, prints, returns, parameter bindings, and control-flow instructions are retained. The main program's final variable writes remain preserved for compatibility with the visualizer's existing state model.
 
 The pass-by-pass trace now shows the actual main TAC and function-body TAC after every pass, and no pass is marked skipped merely because the main program contains a branch or loop. This stage does not add new MiniC language features, global/interprocedural CSE, SSA, register allocation, or a step-by-step execution debugger.
+
+## Enhancement roadmap progress
+
+The current enhancement roadmap is tracked separately from the original compiler phases above:
+
+| Roadmap stage | Enhancement | Status |
+| --- | --- | --- |
+| 1 | Pass-by-pass optimization visualization | Complete |
+| 2 | Example Program Selector | Complete |
+| 3 | Professional Source Code Editor | Complete |
+| 4 | Complete Optimization Coverage | Complete |
+| 5 | Interactive Token Inspector | Implemented in this version; verify locally |
+| 6 | Source-Linked Diagnostics | Upcoming |
+| 7 | Interactive Compiler Pipeline | Upcoming |
+| 8 | Workspace and UI Polish | Upcoming |
+
+The Interactive Token Inspector displays the actual lexer stream, with search and category-based filters. Related tokens are grouped as arithmetic, relational, logical, and assignment operators, keywords, identifiers, constants, punctuation/delimiters, and end of input; the table still shows each exact lexer token type. Selecting a token's lexeme navigates to its source location and highlights the exact lexer-provided offset range in the editor. The EOF token is shown explicitly; because its true lexeme is empty, selecting it moves the editor caret to the end of input instead of highlighting invented characters. No compiler semantics or tokenization rules are changed.
+
+## Stage 26 — Source-Linked Diagnostics
+
+The Errors / Diagnostics panel groups messages by lexical analysis, syntax analysis, semantic analysis, compile-time optimization checks, and runtime execution. Compiler diagnostics display their phase, severity, reported line and column, and original message. When their source offsets are valid for the current source text, **Go to source** scrolls the page back to the editor, scrolls within the editor to the reported source line, selects that exact compiler-reported range, and marks it with a red diagnostic highlight that is visually distinct from the Token Inspector's blue selection. Repeated clicks on the same diagnostic navigate again.
+
+Editing source or loading a different example clears the old diagnostic selection. A zero-length compiler span (such as an error at end of input) moves the caret to the reported position without highlighting invented characters. Runtime messages are separated from compile-time diagnostics; the current interpreter only supplies a message string for runtime errors, so the UI explicitly does not invent a source location or navigation link for them.
+
+Stage 26 adds a focused test file at `tests/stage26-source-linked-diagnostics.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` to verify the change with the project's full toolchain.
