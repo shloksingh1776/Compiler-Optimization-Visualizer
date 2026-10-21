@@ -323,7 +323,7 @@ describe('constant folding', () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* COMBINED OPTIMIZATION (Phase 6: propagation + folding, via optimize()) */
+/* COMBINED OPTIMIZATION (Phase 6: propagation + folding)                 */
 /* NOTE: optimize() now runs all four Phase 6+7 passes; tests in this        */
 /* section that predate Phase 7 isolate constantPropagation/constantFolding */
 /* directly wherever algebraic simplification or DCE would otherwise also   */
@@ -332,9 +332,13 @@ describe('constant folding', () => {
 /* ------------------------------------------------------------------ */
 
 describe('combined optimization', () => {
-  it('17. propagation followed by folding: a = 10; b = 20; t1 = a + b;', () => {
+  it('17. propagation followed by folding materializes a constant result before DCE', () => {
     const p = program([assign('a', c(10)), assign('b', c(20)), binary('t1', v('a'), '+', v('b'))]);
-    expect(formatTAC(optimize(p))).toBe(['a = 10', 'b = 20', 't1 = 30'].join('\n'));
+    // This test isolates the two passes named here. The full optimize() call
+    // also runs DCE, which correctly removes t1 if its value is never used.
+    expect(formatTAC(constantFolding(constantPropagation(p)))).toBe(
+      ['a = 10', 'b = 20', 't1 = 30'].join('\n'),
+    );
   });
 
   it('18. main demo: constants propagate and fold, WITHOUT algebraic simplification or DCE', () => {
@@ -1348,7 +1352,7 @@ describe('Stage 3: type-aware optimization', () => {
     expect(simplified?.kind).toBe('assign');
     if (simplified?.kind === 'assign') {
       expect(simplified.targetType).toBe('float');
-      expect(simplified.value).toEqual({ kind: 'variable', name: 'x', valueType: 'float' });
+      expect(simplified.value).toEqual({ kind: 'variable', name: 'x', valueType: 'float', scope: 'global' });
     }
   });
 

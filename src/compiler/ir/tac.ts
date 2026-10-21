@@ -47,8 +47,10 @@
  */
 import type { FunctionReturnType, MiniCType } from '../types.ts';
 
+export type TACVariableScope = 'global' | 'local';
+
 export type Operand =
-  | { readonly kind: 'variable'; readonly name: string; readonly valueType?: MiniCType }
+  | { readonly kind: 'variable'; readonly name: string; readonly valueType?: MiniCType; readonly scope?: TACVariableScope }
   | { readonly kind: 'constant'; readonly value: number | boolean; readonly valueType?: MiniCType }
   | { readonly kind: 'temporary'; readonly name: string; readonly valueType?: MiniCType };
 
@@ -61,9 +63,11 @@ export type TACUnaryOperator = '-' | '!';
 /**
  * One TAC instruction.
  *
- * Four kinds, matching exactly what MiniC v1's expressions and statements
- * require -- nothing is added speculatively for a feature the language does
- * not have:
+ * Value operations (`assign`, `binary`, `unary`, and `copy`) are accompanied
+ * by control-flow, call, parameter, print, and return instructions as needed
+ * by the supported MiniC statements. The union below is the complete TAC
+ * instruction vocabulary used by this compiler; it deliberately does not
+ * include speculative forms for unsupported language features:
  *
  *   assign  -  target = value            (a value with no operation: a = 10)
  *   binary  -  target = left OP right    (t1 = a + b)
@@ -86,6 +90,10 @@ export type TACInstruction =
   | {
       readonly kind: 'assign';
       readonly target: string;
+      /** Distinguishes a source variable from a compiler temporary. Older hand-built TAC may omit it. */
+      readonly targetKind?: 'variable' | 'temporary';
+      /** Binding selected by semantic analysis/code generation, where applicable. */
+      readonly targetScope?: TACVariableScope;
       readonly targetType?: MiniCType;
       readonly value: Operand;
       readonly sourceNodeId: string;
@@ -110,6 +118,10 @@ export type TACInstruction =
   | {
       readonly kind: 'copy';
       readonly target: string;
+      /** Distinguishes a source variable from a compiler temporary. Older hand-built TAC may omit it. */
+      readonly targetKind?: 'variable' | 'temporary';
+      /** Binding selected by semantic analysis/code generation, where applicable. */
+      readonly targetScope?: TACVariableScope;
       readonly targetType?: MiniCType;
       readonly source: Operand;
       readonly sourceNodeId: string;
@@ -196,10 +208,14 @@ export interface TACFunction {
   readonly parameters: { readonly name: string; readonly type: MiniCType }[];
   readonly returnType: FunctionReturnType;
   readonly instructions: TACInstruction[];
+  /** Declared function locals, including uninitialized locals with no TAC write. */
+  readonly localVariables?: readonly string[];
 }
 
 export interface TACProgram {
   readonly instructions: TACInstruction[];
   readonly temporaryCount: number;
   readonly functions?: Readonly<Record<string, TACFunction>>;
+  /** Top-level variables are global and can be read/written by any function. */
+  readonly globalVariables?: readonly string[];
 }

@@ -29,7 +29,7 @@ import type { Operand, TACInstruction, TACProgram } from '../../ir/tac.ts';
 function operandKey(operand: Operand): string {
   switch (operand.kind) {
     case 'variable':
-      return `v:${operand.name}:${operand.valueType ?? ''}`;
+      return `v:${operand.scope ?? 'unspecified'}:${operand.name}:${operand.valueType ?? ''}`;
     case 'temporary':
       return `t:${operand.name}:${operand.valueType ?? ''}`;
     case 'constant':
@@ -41,17 +41,17 @@ function expressionKey(instruction: Extract<TACInstruction, { kind: 'binary' }>)
   return `${operandKey(instruction.left)}|${instruction.operator}|${operandKey(instruction.right)}|${instruction.targetType ?? ''}`;
 }
 
-function expressionUsesVariable(key: string, name: string): boolean {
-  // Keys are intentionally constructed with a `v:<name>:` component. The
-  // exact split avoids treating a temporary with the same spelling as a
-  // user variable as the same value.
+function expressionUsesLocation(key: string, kind: 'variable' | 'temporary', name: string, scope?: 'global' | 'local'): boolean {
   const parts = key.split('|');
-  return parts.some((part) => part.startsWith(`v:${name}:`));
+  const prefix = kind === 'temporary'
+    ? `t:${name}:`
+    : `v:${scope ?? 'unspecified'}:${name}:`;
+  return parts.some((part) => part.startsWith(prefix));
 }
 
-function invalidateVariable(cache: Map<string, Operand>, name: string): void {
+function invalidateLocation(cache: Map<string, Operand>, kind: 'variable' | 'temporary', name: string, scope?: 'global' | 'local'): void {
   for (const key of cache.keys()) {
-    if (expressionUsesVariable(key, name)) cache.delete(key);
+    if (expressionUsesLocation(key, kind, name, scope)) cache.delete(key);
   }
 }
 
@@ -78,6 +78,7 @@ export function commonSubexpressionEliminationInstructions(
           result.push({
             kind: 'copy',
             target: instruction.target,
+            targetKind: 'temporary',
             targetType: instruction.targetType,
             source: previous,
             sourceNodeId: instruction.sourceNodeId,
@@ -90,12 +91,12 @@ export function commonSubexpressionEliminationInstructions(
       }
 
       case 'assign':
-        invalidateVariable(cache, instruction.target);
+        invalidateLocation(cache, instruction.targetKind === 'temporary' ? 'temporary' : 'variable', instruction.target, instruction.targetScope);
         result.push(instruction);
         break;
 
       case 'copy':
-        invalidateVariable(cache, instruction.target);
+        invalidateLocation(cache, instruction.targetKind === 'temporary' ? 'temporary' : 'variable', instruction.target, instruction.targetScope);
         result.push(instruction);
         break;
 
@@ -147,8 +148,7 @@ export function commonSubexpressionEliminationInstructions(
 /** Run CSE over the main TAC instruction list. */
 export function commonSubexpressionElimination(program: TACProgram): TACProgram {
   return {
+    ...program,
     instructions: commonSubexpressionEliminationInstructions(program.instructions),
-    temporaryCount: program.temporaryCount,
-    functions: program.functions,
   };
 }

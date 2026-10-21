@@ -91,6 +91,9 @@ class TACGenerator {
   private tempCount = 0;
   private labelCount = 0;
   private readonly variableTypes = new Map<string, MiniCType>();
+  private readonly globalVariableTypes = new Map<string, MiniCType>();
+  /** Local names are activated as their declarations are encountered, preserving declaration-before-use lookup. */
+  private currentFunctionLocalNames: Set<string> | null = null;
   private readonly functions = new Map<string, TACFunction>();
   private readonly functionReturnTypes = new Map<string, FunctionReturnType>();
   private readonly breakTargets: string[] = [];
@@ -103,10 +106,28 @@ class TACGenerator {
     for (const statement of program.body) {
       if (statement.type !== 'FunctionDecl') this.generateStatement(statement);
     }
+    this.globalVariableTypes.clear();
+    for (const [name, type] of this.variableTypes) this.globalVariableTypes.set(name, type);
     for (const statement of program.body) {
       if (statement.type === 'FunctionDecl') this.generateFunction(statement);
     }
-    return { instructions: this.instructions, temporaryCount: this.tempCount, functions: Object.fromEntries(this.functions) };
+    return {
+      instructions: this.instructions,
+      temporaryCount: this.tempCount,
+      functions: Object.fromEntries(this.functions),
+      globalVariables: [...this.globalVariableTypes.keys()],
+    };
+  }
+
+  private variableScope(name: string): 'global' | 'local' {
+    return this.currentFunctionLocalNames?.has(name) ? 'local' : 'global';
+  }
+
+  private variableType(name: string): MiniCType {
+    if (this.currentFunctionLocalNames !== null && !this.currentFunctionLocalNames.has(name)) {
+      return this.globalVariableTypes.get(name) ?? 'int';
+    }
+    return this.variableTypes.get(name) ?? this.globalVariableTypes.get(name) ?? 'int';
   }
 
   /** Mint the next temporary name: t1, t2, t3, ... in visitation order. */
@@ -128,8 +149,25 @@ class TACGenerator {
   private generateStatement(statement: Stmt): void {
     switch (statement.type) {
       case 'VarDecl':
-        this.variableTypes.set(statement.name, statement.varType ?? 'int');
-        this.generateDeclaration(statement);
+        if (this.currentFunctionLocalNames === null) {
+          this.variableTypes.set(statement.name, statement.varType ?? 'int');
+          this.generateDeclaration(statement);
+        } else {
+          const declaredType = statement.varType ?? 'int';
+          if (statement.init === null) {
+            this.variableTypes.set(statement.name, declaredType);
+            this.currentFunctionLocalNames.add(statement.name);
+            return;
+          }
+
+          // The initializer is generated before this local binding becomes
+          // visible. If it shares a name with a global, the initializer reads
+          // the global and the final store writes the new local variable.
+          const initializer = this.generateExpression(statement.init);
+          this.variableTypes.set(statement.name, declaredType);
+          this.currentFunctionLocalNames.add(statement.name);
+          this.emitFinalValueAssignment(statement.name, initializer, declaredType, statement.id, 'local');
+        }
         return;
       case 'Assignment':
         this.generateAssignment(statement);
@@ -186,14 +224,24 @@ class TACGenerator {
     const localInstructions: TACInstruction[] = [];
     this.instructions = localInstructions;
     this.variableTypes.clear();
+    this.currentFunctionLocalNames = new Set<string>();
     for (const p of fn.parameters) {
       this.variableTypes.set(p.name, p.type);
+      this.currentFunctionLocalNames.add(p.name);
       this.emit({ kind: 'param', name: p.name, valueType: p.type, sourceNodeId: fn.id });
     }
     for (const st of fn.body) this.generateStatement(st);
-    this.functions.set(fn.name, { name: fn.name, parameters: fn.parameters.map(p => ({ name: p.name, type: p.type })), returnType: fn.returnType, instructions: localInstructions });
+    const parameterNames = new Set(fn.parameters.map((parameter) => parameter.name));
+    this.functions.set(fn.name, {
+      name: fn.name,
+      parameters: fn.parameters.map(p => ({ name: p.name, type: p.type })),
+      returnType: fn.returnType,
+      instructions: localInstructions,
+      localVariables: [...this.currentFunctionLocalNames].filter((name) => !parameterNames.has(name)),
+    });
     this.instructions = savedInstructions;
     this.variableTypes.clear();
+    this.currentFunctionLocalNames = null;
   }
 
   private generateDeclaration(declaration: VarDecl): void {
@@ -214,12 +262,12 @@ class TACGenerator {
       return;
     }
     const operator = assignment.compoundOperator[0] as '+' | '-' | '*' | '/' | '%';
-    const targetType = this.variableTypes.get(assignment.name) ?? 'int';
-    const left = { kind: 'variable' as const, name: assignment.name, valueType: targetType };
+    const targetType = this.variableType(assignment.name);
+    const left = { kind: 'variable' as const, name: assignment.name, valueType: targetType, scope: this.variableScope(assignment.name) };
     const right = this.generateExpression(assignment.value);
     const temp = this.freshTemporary();
     this.emit({ kind: 'binary', target: temp, targetType, left, operator, right, sourceNodeId: assignment.id });
-    this.emit({ kind: 'copy', target: assignment.name, targetType, source: { kind: 'temporary', name: temp, valueType: targetType }, sourceNodeId: assignment.id });
+    this.emit({ kind: 'copy', target: assignment.name, targetKind: 'variable', targetScope: this.variableScope(assignment.name), targetType, source: { kind: 'temporary', name: temp, valueType: targetType }, sourceNodeId: assignment.id });
   }
 
   /**
@@ -236,13 +284,13 @@ class TACGenerator {
    * already know how to execute and optimize binary arithmetic and copies.
    */
   private generateIncrement(statement: IncrementStmt): void {
-    const targetType = this.variableTypes.get(statement.name) ?? 'int';
+    const targetType = this.variableType(statement.name);
     const temp = this.freshTemporary();
     this.emit({
       kind: 'binary',
       target: temp,
       targetType,
-      left: { kind: 'variable', name: statement.name, valueType: targetType },
+      left: { kind: 'variable', name: statement.name, valueType: targetType, scope: this.variableScope(statement.name) },
       operator: statement.operator === '++' ? '+' : '-',
       right: { kind: 'constant', value: 1, valueType: 'int' },
       sourceNodeId: statement.id,
@@ -250,6 +298,8 @@ class TACGenerator {
     this.emit({
       kind: 'copy',
       target: statement.name,
+      targetKind: 'variable',
+      targetScope: this.variableScope(statement.name),
       targetType,
       source: { kind: 'temporary', name: temp, valueType: targetType },
       sourceNodeId: statement.id,
@@ -365,15 +415,25 @@ class TACGenerator {
    */
   private generateFinalAssignment(target: string, expr: Expr, sourceNodeId: string): void {
     const result = this.generateExpression(expr);
-    const targetType = this.variableTypes.get(target) ?? result.valueType ?? 'int';
+    const targetType = this.variableType(target) ?? result.valueType ?? 'int';
+    this.emitFinalValueAssignment(target, result, targetType, sourceNodeId, this.variableScope(target));
+  }
+
+  private emitFinalValueAssignment(
+    target: string,
+    result: Operand,
+    targetType: MiniCType,
+    sourceNodeId: string,
+    targetScope: 'global' | 'local',
+  ): void {
     // Assignment to float performs the language's simple numeric promotion:
     // an int value stored in a float variable is represented as a float value
     // from this point onward. Semantic analysis has already rejected float -> int.
     const normalized: Operand = result.valueType === targetType ? result : { ...result, valueType: targetType };
     if (normalized.kind === 'temporary') {
-      this.emit({ kind: 'copy', target, targetType, source: normalized, sourceNodeId });
+      this.emit({ kind: 'copy', target, targetKind: 'variable', targetScope, targetType, source: normalized, sourceNodeId });
     } else {
-      this.emit({ kind: 'assign', target, targetType, value: normalized, sourceNodeId });
+      this.emit({ kind: 'assign', target, targetKind: 'variable', targetScope, targetType, value: normalized, sourceNodeId });
     }
   }
 
@@ -392,13 +452,13 @@ class TACGenerator {
     this.emit({ kind: 'jumpIfFalse', condition: right, label: falseLabel, sourceNodeId });
 
     this.emit({
-      kind: 'assign', target, targetType: 'bool',
+      kind: 'assign', target, targetKind: 'temporary', targetType: 'bool',
       value: { kind: 'constant', value: true, valueType: 'bool' }, sourceNodeId,
     });
     this.emit({ kind: 'jump', label: endLabel, sourceNodeId });
     this.emit({ kind: 'label', label: falseLabel, sourceNodeId });
     this.emit({
-      kind: 'assign', target, targetType: 'bool',
+      kind: 'assign', target, targetKind: 'temporary', targetType: 'bool',
       value: { kind: 'constant', value: false, valueType: 'bool' }, sourceNodeId,
     });
     this.emit({ kind: 'label', label: endLabel, sourceNodeId });
@@ -412,7 +472,7 @@ class TACGenerator {
     switch (expression.type) {
       case 'NumberLiteral': return expression.valueType ?? (expression.value % 1 !== 0 ? 'float' : 'int');
       case 'BooleanLiteral': return 'bool';
-      case 'Identifier': return this.variableTypes.get(expression.name) ?? 'int';
+      case 'Identifier': return this.variableType(expression.name);
       case 'CallExpr': { const t = this.functionReturnTypes.get(expression.name) ?? 'int'; return t === 'void' ? 'int' : t; }
       case 'UnaryExpr': return expression.operator === '!' ? 'bool' : this.expressionType(expression.operand);
       case 'BinaryExpr': {
@@ -432,9 +492,9 @@ class TACGenerator {
   private emitConditionalValue(target: string, value: Operand, targetType: MiniCType, sourceNodeId: string): void {
     const normalized: Operand = value.valueType === targetType ? value : { ...value, valueType: targetType };
     if (normalized.kind === 'temporary') {
-      this.emit({ kind: 'copy', target, targetType, source: normalized, sourceNodeId });
+      this.emit({ kind: 'copy', target, targetKind: 'temporary', targetType, source: normalized, sourceNodeId });
     } else {
-      this.emit({ kind: 'assign', target, targetType, value: normalized, sourceNodeId });
+      this.emit({ kind: 'assign', target, targetKind: 'temporary', targetType, value: normalized, sourceNodeId });
     }
   }
 
@@ -470,7 +530,7 @@ class TACGenerator {
     const left = this.generateExpression(leftExpr);
     this.emit({ kind: 'jumpIfFalse', condition: left, label: rightLabel, sourceNodeId });
     this.emit({
-      kind: 'assign', target, targetType: 'bool',
+      kind: 'assign', target, targetKind: 'temporary', targetType: 'bool',
       value: { kind: 'constant', value: true, valueType: 'bool' }, sourceNodeId,
     });
     this.emit({ kind: 'jump', label: endLabel, sourceNodeId });
@@ -479,14 +539,14 @@ class TACGenerator {
     const right = this.generateExpression(rightExpr);
     this.emit({ kind: 'jumpIfFalse', condition: right, label: falseLabel, sourceNodeId });
     this.emit({
-      kind: 'assign', target, targetType: 'bool',
+      kind: 'assign', target, targetKind: 'temporary', targetType: 'bool',
       value: { kind: 'constant', value: true, valueType: 'bool' }, sourceNodeId,
     });
     this.emit({ kind: 'jump', label: endLabel, sourceNodeId });
 
     this.emit({ kind: 'label', label: falseLabel, sourceNodeId });
     this.emit({
-      kind: 'assign', target, targetType: 'bool',
+      kind: 'assign', target, targetKind: 'temporary', targetType: 'bool',
       value: { kind: 'constant', value: false, valueType: 'bool' }, sourceNodeId,
     });
     this.emit({ kind: 'label', label: endLabel, sourceNodeId });
@@ -529,7 +589,7 @@ class TACGenerator {
         // Likewise a variable reference needs no computation to "produce" --
         // by the time TAC generation runs, semantic analysis has already
         // guaranteed every identifier here refers to a declared variable.
-        return { kind: 'variable', name: expression.name, valueType: this.variableTypes.get(expression.name) ?? 'int' };
+        return { kind: 'variable', name: expression.name, valueType: this.variableType(expression.name), scope: this.variableScope(expression.name) };
 
       case 'BinaryExpr': {
         if (expression.operator === '&&') return this.generateLogicalAnd(expression.left, expression.right, expression.id);

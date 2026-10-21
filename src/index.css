@@ -160,3 +160,313 @@
   background: rgb(220 38 38 / 24%);
   color: transparent;
 }
+
+/* Stage 8: shared workspace chrome and accessible split-pane layout. */
+.app-shell {
+  --workspace-border: #334155;
+  --workspace-panel: rgb(15 23 42 / 72%);
+  --workspace-panel-muted: rgb(2 6 23 / 42%);
+  --workspace-tab-hover: #1e293b;
+}
+
+.workspace-shell {
+  min-width: 0;
+}
+
+.workspace-split {
+  display: grid;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+}
+
+.workspace-pane {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--workspace-border);
+  border-radius: 0.9rem;
+  background: var(--workspace-panel);
+  box-shadow: 0 12px 36px rgb(2 6 23 / 10%);
+}
+
+.workspace-pane--source {
+  padding: 1rem;
+}
+
+.workspace-pane--results {
+  display: flex;
+  min-height: 38rem;
+  flex-direction: column;
+}
+
+.workspace-pane-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.workspace-pane-heading--results {
+  margin: 1rem 1rem 0.8rem;
+}
+
+.workspace-eyebrow {
+  margin-bottom: 0.2rem;
+  color: #7dd3fc;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.workspace-resizer {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  width: 12px;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.workspace-resizer span {
+  width: 3px;
+  height: 3rem;
+  border-radius: 999px;
+  background: #334155;
+  transition: height 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.workspace-resizer:hover span,
+.workspace-resizer:focus-visible span,
+.workspace-resizer:active span {
+  height: 4.5rem;
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgb(56 189 248 / 12%);
+}
+
+.workspace-tabs-wrap {
+  border-bottom: 1px solid var(--workspace-border);
+  padding: 0 0.75rem;
+}
+
+.workspace-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 0.2rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.workspace-tab {
+  position: relative;
+  display: inline-flex;
+  min-height: 2.85rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 0.55rem 0.55rem 0 0;
+  padding: 0.55rem 0.65rem 0.45rem;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+}
+
+.workspace-tab:hover {
+  background: var(--workspace-tab-hover);
+  color: #e2e8f0;
+}
+
+.workspace-tab:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: -2px;
+}
+
+.workspace-tab--active {
+  border-color: var(--workspace-border);
+  border-bottom-color: #38bdf8;
+  background: var(--workspace-tab-hover);
+  color: #e0f2fe;
+}
+
+.workspace-tab-marker {
+  display: inline-flex;
+  min-width: 1.15rem;
+  align-items: center;
+  justify-content: center;
+  color: #7dd3fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.workspace-tab-alert {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: #f87171;
+  box-shadow: 0 0 0 2px rgb(248 113 113 / 12%);
+}
+
+.workspace-panel-content {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding: 1rem;
+}
+
+.workspace-tabpanel[hidden] {
+  display: none !important;
+}
+
+.workspace-tabpanel {
+  min-width: 0;
+  animation: workspace-tab-enter 120ms ease-out;
+}
+
+.workspace-tabpanel > section:first-child {
+  margin-bottom: 0;
+}
+
+.workspace-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  border-top: 1px solid var(--workspace-border);
+  padding: 0.7rem 1rem;
+  color: #64748b;
+  font-size: 0.68rem;
+}
+
+.app-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 1.1rem 0.2rem 0.25rem;
+  color: #64748b;
+  font-size: 0.7rem;
+}
+
+@keyframes workspace-tab-enter {
+  from { opacity: 0.78; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Optional light theme. Keep status colours and syntax selection semantics distinct. */
+.app-shell[data-theme="light"] {
+  background-color: #eef2f7 !important;
+  color: #0f172a !important;
+  --workspace-border: #cbd5e1;
+  --workspace-panel: rgb(255 255 255 / 94%);
+  --workspace-panel-muted: #f8fafc;
+  --workspace-tab-hover: #e2e8f0;
+}
+
+.app-shell[data-theme="light"] [class~="bg-slate-950"] { background-color: #f8fafc !important; }
+.app-shell[data-theme="light"] [class~="bg-slate-950/70"],
+.app-shell[data-theme="light"] [class~="bg-slate-950/60"],
+.app-shell[data-theme="light"] [class~="bg-slate-950/50"] { background-color: #f8fafc !important; }
+.app-shell[data-theme="light"] [class~="bg-slate-900"],
+.app-shell[data-theme="light"] [class~="bg-slate-900/90"],
+.app-shell[data-theme="light"] [class~="bg-slate-900/80"],
+.app-shell[data-theme="light"] [class~="bg-slate-900/60"],
+.app-shell[data-theme="light"] [class~="bg-slate-900/50"] { background-color: #ffffff !important; }
+.app-shell[data-theme="light"] [class~="bg-slate-800"],
+.app-shell[data-theme="light"] [class~="bg-slate-800/80"] { background-color: #e2e8f0 !important; }
+.app-shell[data-theme="light"] [class~="border-slate-700"],
+.app-shell[data-theme="light"] [class~="border-slate-800"],
+.app-shell[data-theme="light"] [class~="border-slate-600"] { border-color: #cbd5e1 !important; }
+.app-shell[data-theme="light"] [class~="text-slate-100"],
+.app-shell[data-theme="light"] [class~="text-slate-200"] { color: #0f172a !important; }
+.app-shell[data-theme="light"] [class~="text-slate-300"] { color: #334155 !important; }
+.app-shell[data-theme="light"] [class~="text-slate-400"] { color: #475569 !important; }
+.app-shell[data-theme="light"] [class~="text-slate-500"],
+.app-shell[data-theme="light"] [class~="text-slate-600"] { color: #64748b !important; }
+.app-shell[data-theme="light"] [class~="hover:bg-slate-800"]:hover,
+.app-shell[data-theme="light"] [class~="hover:bg-slate-800/80"]:hover { background-color: #e2e8f0 !important; }
+.app-shell[data-theme="light"] [class~="bg-red-950/10"] { background-color: #fef2f2 !important; }
+.app-shell[data-theme="light"] [class~="bg-red-950/20"],
+.app-shell[data-theme="light"] [class~="bg-red-950/30"] { background-color: #fef2f2 !important; }
+.app-shell[data-theme="light"] [class~="bg-amber-950/20"] { background-color: #fffbeb !important; }
+.app-shell[data-theme="light"] [class~="bg-emerald-950/25"] { background-color: #ecfdf5 !important; }
+.app-shell[data-theme="light"] [class~="bg-sky-950/80"] { background-color: #e0f2fe !important; }
+.app-shell[data-theme="light"] [class~="text-red-200"],
+.app-shell[data-theme="light"] [class~="text-red-300"] { color: #b91c1c !important; }
+.app-shell[data-theme="light"] [class~="text-amber-100"],
+.app-shell[data-theme="light"] [class~="text-amber-200"],
+.app-shell[data-theme="light"] [class~="text-amber-300"] { color: #92400e !important; }
+.app-shell[data-theme="light"] [class~="text-emerald-200"],
+.app-shell[data-theme="light"] [class~="text-emerald-300"],
+.app-shell[data-theme="light"] [class~="text-emerald-400"] { color: #047857 !important; }
+.app-shell[data-theme="light"] [class~="text-sky-200"],
+.app-shell[data-theme="light"] [class~="text-sky-300"] { color: #0369a1 !important; }
+.app-shell[data-theme="light"] [class~="text-slate-500"] { color: #64748b !important; }
+
+.app-shell[data-theme="light"] .workspace-resizer span { background: #cbd5e1; }
+.app-shell[data-theme="light"] .workspace-resizer:hover span,
+.app-shell[data-theme="light"] .workspace-resizer:focus-visible span,
+.app-shell[data-theme="light"] .workspace-resizer:active span { background: #0284c7; }
+.app-shell[data-theme="light"] .workspace-tab { color: #475569; }
+.app-shell[data-theme="light"] .workspace-tab:hover { color: #0f172a; }
+.app-shell[data-theme="light"] .workspace-tab--active { color: #0c4a6e; }
+.app-shell[data-theme="light"] .workspace-eyebrow { color: #0369a1; }
+
+.code-editor--light {
+  border-color: #cbd5e1;
+  background: #ffffff;
+}
+.code-editor--light:focus-within {
+  border-color: #0284c7;
+  box-shadow: 0 0 0 1px rgb(2 132 199 / 18%);
+}
+.code-editor--light .code-editor__gutter {
+  border-right-color: #e2e8f0;
+  background: #f1f5f9;
+  color: #64748b;
+}
+.code-editor--light .code-editor__highlight { color: #0f172a; }
+.code-editor--light .code-editor__input { caret-color: #0f172a; }
+.code-editor--light .code-editor__input::selection { background: rgb(2 132 199 / 24%); }
+.code-editor--light .code-editor__input::-webkit-scrollbar-track { background: #f1f5f9; }
+.code-editor--light .code-editor__input::-webkit-scrollbar-thumb { border-color: #f1f5f9; background: #94a3b8; }
+.code-editor--light .syntax-type { color: #0e7490; }
+.code-editor--light .syntax-keyword { color: #6d28d9; }
+.code-editor--light .syntax-literal,
+.code-editor--light .syntax-number { color: #a16207; }
+.code-editor--light .syntax-operator { color: #be123c; }
+.code-editor--light .syntax-punctuation { color: #64748b; }
+.code-editor--light .syntax-function { color: #0369a1; }
+.code-editor--light .syntax-identifier,
+.code-editor--light .syntax-plain,
+.code-editor--light .syntax-whitespace { color: #1e293b; }
+.code-editor--light .syntax-comment { color: #64748b; }
+.code-editor--light .syntax-bracket-match { background: rgb(2 132 199 / 15%); color: #075985; }
+.code-editor--light .syntax-token-selected { background: rgb(2 132 199 / 24%); color: #0f172a; }
+.code-editor--light .syntax-diagnostic-selected { background: rgb(220 38 38 / 18%); color: #7f1d1d; }
+
+@media (max-width: 900px) {
+  .workspace-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto auto;
+    gap: 1rem;
+  }
+  .workspace-pane--source { grid-column: 1; grid-row: 1; }
+  .workspace-resizer { display: none; }
+  .workspace-pane--results { grid-column: 1; grid-row: 2; min-height: 30rem; }
+  .workspace-panel-content { padding: 0.8rem; }
+  .workspace-footer { padding: 0.7rem 0.8rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tabpanel,
+  .workspace-tab,
+  .workspace-resizer span { animation: none; transition: none; }
+}

@@ -647,8 +647,8 @@ describe('pipeline: division-by-zero detection', () => {
     expect(result.errors.length).toBe(0);
     expect(result.optimizedTac).not.toBe(null);
     // Existing constant propagation + folding behaviour is unchanged: 10 / 2
-    // folds down to the literal 5 (there is no copy propagation in this
-    // project, so `x = t1` correctly stays a separate instruction).
+    // folds down to the literal 5. The optimizer deliberately retains the
+    // temporary-to-variable instruction boundary, so `x = t1` stays separate.
     expect(formatTAC(result.optimizedTac!)).toBe(['y = 2', 't1 = 5', 'x = t1'].join('\n'));
   });
 

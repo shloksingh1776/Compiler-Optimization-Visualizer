@@ -84,6 +84,7 @@ function foldInstruction(instruction: TACInstruction): TACInstruction {
       return {
         kind: 'assign',
         target: instruction.target,
+        targetKind: 'temporary',
         value: { kind: 'constant', value: result, valueType: resultType },
         targetType: resultType,
         sourceNodeId: instruction.sourceNodeId,
@@ -99,6 +100,7 @@ function foldInstruction(instruction: TACInstruction): TACInstruction {
       return {
         kind: 'assign',
         target: instruction.target,
+        targetKind: 'temporary',
         value: { kind: 'constant', value: result, valueType: resultType },
         targetType: resultType,
         sourceNodeId: instruction.sourceNodeId,
@@ -132,5 +134,5 @@ function foldInstruction(instruction: TACInstruction): TACInstruction {
  *   // t1 = 30
  */
 export function constantFolding(program: TACProgram): TACProgram {
-  return { instructions: program.instructions.map(foldInstruction), temporaryCount: program.temporaryCount, functions: program.functions };
+  return { ...program, instructions: program.instructions.map(foldInstruction) };
 }

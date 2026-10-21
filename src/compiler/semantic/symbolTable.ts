@@ -11,16 +11,14 @@
  *                          | a    | variable | int  | global | Ln 1, Col 5 | yes  |
  *                          | b    | variable | int  | global | Ln 2, Col 5 | no   |
  *
- * WHY ONE FLAT TABLE IS ENOUGH HERE
+ * ONE FLAT TABLE PER SCOPE
  *
- * A real C compiler keeps a *stack* of symbol tables, pushing one on entry to
- * each block and popping it on exit, so that an inner `int x` can shadow an
- * outer one and disappear again at the closing brace.
- *
- * The current project supports function-local scopes, while block statements
- * reuse the surrounding function scope. A separate local table is created for
- * each function, allowing a local name to coexist with a global name. Control
- * flow does not create a new symbol table in this MiniC subset.
+ * A real C compiler often keeps a *stack* of symbol tables, pushing one on
+ * entry to each block and popping it on exit. This MiniC subset has one global
+ * table plus a separate flat local table per function. Semantic name resolution
+ * checks the function table first and falls back to the global table, allowing
+ * parameters and locals to shadow globals. Block statements reuse their
+ * function's table; block-level shadowing is not implemented.
  *
  * INSERTION ORDER: a JavaScript Map iterates in insertion order, so `all()`
  * lists variables in the order they were declared, which is what the user

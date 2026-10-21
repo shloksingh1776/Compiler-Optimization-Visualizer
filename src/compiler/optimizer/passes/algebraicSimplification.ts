@@ -92,9 +92,9 @@ function isConstantValue(operand: Operand, value: number): boolean {
 function toValueInstruction(target: string, result: Operand, sourceNodeId: string, targetType: MiniCType = result.valueType ?? 'int'): TACInstruction {
   const normalized: Operand = result.valueType === targetType ? result : { ...result, valueType: targetType };
   if (normalized.kind === 'temporary') {
-    return { kind: 'copy', target, targetType, source: normalized, sourceNodeId };
+    return { kind: 'copy', target, targetKind: 'temporary', targetType, source: normalized, sourceNodeId };
   }
-  return { kind: 'assign', target, targetType, value: normalized, sourceNodeId };
+  return { kind: 'assign', target, targetKind: 'temporary', targetType, value: normalized, sourceNodeId };
 }
 
 /** Apply the six approved identities to one instruction; everything else passes through untouched. */
@@ -149,7 +149,7 @@ function simplifyInstruction(instruction: TACInstruction): TACInstruction {
  */
 export function algebraicSimplification(program: TACProgram): TACProgram {
   return {
+    ...program,
     instructions: program.instructions.map(simplifyInstruction),
-    temporaryCount: program.temporaryCount,
   };
 }

@@ -20,24 +20,20 @@
  *   2. A name may not be declared twice.
  *   3. Every identifier in an initializer must already be declared.
  *   4. Assignment requires the target to be declared.
- *   5. Every identifier used anywhere must be in the symbol table.
+ *   5. Function-local names and parameters take precedence; otherwise a
+ *      function may refer to a top-level global variable.
  *   6. Expressions are analysed recursively.
  *
- * There is no type checking to do: MiniC v1 has exactly one type, so every
- * expression is an int and no operator can be misapplied. In a language with
- * more than one type this same walk would also compute and check the type of
- * every expression.
+ * The analyser also checks expression and assignment types across MiniC's
+ * int, float, bool, and void function features.
  *
  * DECLARE-AFTER-USE ORDERING
  *
  * For a declaration with an initializer, the initializer is analysed BEFORE
- * the new name is added to the table. That ordering is what makes
- *
- *      int a = a + 1;
- *
- * an error: at the moment the initializer is checked, `a` does not yet exist.
- * Adding the name first would silently accept a variable initialised from
- * itself.
+ * the new name is added to the current scope. If no visible binding named `a`
+ * exists, `int a = a + 1;` is an error. Inside a function where a global `a`
+ * already exists, however, the initializer reads that global and only then
+ * introduces the new local `a`; local names take precedence after declaration.
  *
  * DETERMINISM: a single left-to-right, top-to-bottom walk with no shared
  * state. The same AST always yields the same symbols and the same errors in
@@ -98,12 +94,18 @@ class Analyzer {
     this.functionSymbols.set(fn.name, local.all());
   }
 
+  /** Resolve a function-local name first, then fall back to the global table. */
+  private lookupVisibleVariable(table: SymbolTable, name: string): Symbol | undefined {
+    if (table === this.table) return table.lookup(name);
+    return table.lookup(name) ?? this.table.lookup(name);
+  }
+
   private analyzeStatement(statement: Stmt, table: SymbolTable, returnType: FunctionReturnType | null, loopDepth = 0, switchDepth = 0): void {
     switch (statement.type) {
       case 'VarDecl': this.analyzeDeclaration(statement, table); return;
       case 'Assignment': this.analyzeAssignment(statement, table); return;
       case 'IncrementStmt': {
-        const target = table.lookup(statement.name);
+        const target = this.lookupVisibleVariable(table, statement.name);
         if (!target) {
           this.report(`Cannot increment/decrement undeclared variable '${statement.name}'`, statement.nameLine, statement.nameColumn, statement.start, statement.end);
         } else if (target.type === 'bool') {
@@ -208,7 +210,7 @@ class Analyzer {
   }
 
   private analyzeAssignment(a: Assignment, table: SymbolTable): void {
-    const target = table.lookup(a.name);
+    const target = this.lookupVisibleVariable(table, a.name);
     if (!target) this.report(`Cannot assign to undeclared variable '${a.name}'`, a.nameLine, a.nameColumn, a.start, a.end);
     const t = this.analyzeExpression(a.value, table);
     if (!a.compoundOperator) {
@@ -225,7 +227,7 @@ class Analyzer {
     switch (expression.type) {
       case 'NumberLiteral': return expression.valueType ?? (expression.value % 1 !== 0 ? 'float' : 'int');
       case 'BooleanLiteral': return 'bool';
-      case 'Identifier': { const s = table.lookup(expression.name); if (!s) { this.report(`Undeclared variable '${expression.name}'`, expression.line, expression.column, expression.start, expression.end); return null; } return s.type; }
+      case 'Identifier': { const s = this.lookupVisibleVariable(table, expression.name); if (!s) { this.report(`Undeclared variable '${expression.name}'`, expression.line, expression.column, expression.start, expression.end); return null; } return s.type; }
       case 'ConditionalExpr': {
         const conditionType = this.analyzeExpression(expression.condition, table);
         if (conditionType !== null && conditionType !== 'bool') {

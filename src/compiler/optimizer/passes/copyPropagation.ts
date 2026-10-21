@@ -32,7 +32,9 @@ type Trackable = Extract<Operand, { kind: 'variable' | 'temporary' }>;
 type CopyEnvironment = Map<string, Trackable>;
 
 function key(operand: Trackable): string {
-  return `${operand.kind}:${operand.name}`;
+  return operand.kind === 'variable'
+    ? `${operand.kind}:${operand.scope ?? 'unspecified'}:${operand.name}`
+    : `${operand.kind}:${operand.name}`;
 }
 
 function resolve(operand: Operand, env: CopyEnvironment): Operand {
@@ -113,9 +115,12 @@ function rewriteInstruction(
   switch (instruction.kind) {
     case 'assign': {
       const target: Trackable = {
-        kind: temporaryNames.has(instruction.target) ? 'temporary' : 'variable',
+        kind: instruction.targetKind ?? (temporaryNames.has(instruction.target) ? 'temporary' : 'variable'),
         name: instruction.target,
         valueType: instruction.targetType,
+        ...(instruction.targetKind === 'variable' || (instruction.targetKind === undefined && !temporaryNames.has(instruction.target))
+          ? { scope: instruction.targetScope }
+          : {}),
       };
       const value = resolveForUse(instruction.value, env);
       invalidateWrittenName(env, target);
@@ -139,7 +144,14 @@ function rewriteInstruction(
 
     case 'copy': {
       const source = resolveForUse(instruction.source, env);
-      const target: Trackable = { kind: temporaryNames.has(instruction.target) ? 'temporary' : 'variable', name: instruction.target, valueType: instruction.targetType };
+      const target: Trackable = {
+        kind: instruction.targetKind ?? (temporaryNames.has(instruction.target) ? 'temporary' : 'variable'),
+        name: instruction.target,
+        valueType: instruction.targetType,
+        ...(instruction.targetKind === 'variable' || (instruction.targetKind === undefined && !temporaryNames.has(instruction.target))
+          ? { scope: instruction.targetScope }
+          : {}),
+      };
       trackCopy(env, target, source);
       return source === instruction.source ? instruction : { ...instruction, source };
     }
@@ -227,11 +239,28 @@ export function copyPropagationInstructions(instructions: readonly TACInstructio
 
   for (const instruction of instructions) {
     if (instruction.kind === 'param') {
+      recordType(key({ kind: 'variable', name: instruction.name, scope: 'local' }), instruction.valueType);
+      // Compatibility for hand-built TAC from before variable-scope metadata
+      // existed: those operands have no scope annotation.
       recordType(key({ kind: 'variable', name: instruction.name }), instruction.valueType);
-    } else if (instruction.kind === 'assign' || instruction.kind === 'copy' ||
-      instruction.kind === 'binary' || instruction.kind === 'unary' || instruction.kind === 'call') {
-      const kind = temporaryNames.has(instruction.target) ? 'temporary' : 'variable';
-      recordType(key({ kind, name: instruction.target }), instruction.targetType);
+    } else if (instruction.kind === 'assign' || instruction.kind === 'copy') {
+      const kind = instruction.targetKind ?? (temporaryNames.has(instruction.target) ? 'temporary' : 'variable');
+      recordType(key({ kind, name: instruction.target, ...(kind === 'variable' ? { scope: instruction.targetScope } : {}) } as Trackable), instruction.targetType);
+    } else if (instruction.kind === 'binary' || instruction.kind === 'unary' || instruction.kind === 'call') {
+      recordType(key({ kind: 'temporary', name: instruction.target }), instruction.targetType === 'void' ? undefined : instruction.targetType);
+    }
+    const operands: Operand[] = instruction.kind === 'assign' ? [instruction.value]
+      : instruction.kind === 'copy' ? [instruction.source]
+      : instruction.kind === 'binary' ? [instruction.left, instruction.right]
+      : instruction.kind === 'unary' ? [instruction.operand]
+      : instruction.kind === 'call' ? instruction.args
+      : instruction.kind === 'print' || instruction.kind === 'return' ? [instruction.operand]
+      : instruction.kind === 'jumpIfFalse' ? [instruction.condition]
+      : [];
+    for (const operand of operands) {
+      if (operand.kind !== 'constant' && operand.valueType !== undefined) {
+        recordType(key(operand), operand.valueType);
+      }
     }
   }
 

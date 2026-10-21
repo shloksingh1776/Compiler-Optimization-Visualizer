@@ -75,8 +75,8 @@ import type { MiniCType } from '../../types.ts';
 type TrackableKind = 'variable' | 'temporary';
 
 /** Build the environment key that keeps variables and temporaries from colliding. */
-function envKey(kind: TrackableKind, name: string): string {
-  return `${kind}:${name}`;
+function envKey(kind: TrackableKind, name: string, scope?: 'global' | 'local'): string {
+  return kind === 'variable' ? `${kind}:${scope ?? 'unspecified'}:${name}` : `${kind}:${name}`;
 }
 
 /**
@@ -88,7 +88,7 @@ function envKey(kind: TrackableKind, name: string): string {
  */
 function substitute(operand: Operand, env: ReadonlyMap<string, { value: number | boolean; valueType?: MiniCType }>): Operand {
   if (operand.kind === 'constant') return operand;
-  const known = env.get(envKey(operand.kind, operand.name));
+  const known = env.get(envKey(operand.kind, operand.name, operand.kind === 'variable' ? operand.scope : undefined));
   if (known === undefined) return operand;
   return { kind: 'constant', value: known.value, valueType: known.valueType };
 }
@@ -102,8 +102,14 @@ function substitute(operand: Operand, env: ReadonlyMap<string, { value: number |
  * `binary`/`unary` instruction, never of an `assign`/`copy`), so the target
  * is always tracked with kind `'variable'`.
  */
-function updateTarget(env: Map<string, { value: number | boolean; valueType?: MiniCType }>, target: string, resolved: Operand): void {
-  const key = envKey('variable', target);
+function updateTarget(
+  env: Map<string, { value: number | boolean; valueType?: MiniCType }>,
+  target: string,
+  resolved: Operand,
+  targetKind: 'variable' | 'temporary' = 'variable',
+  targetScope?: 'global' | 'local',
+): void {
+  const key = envKey(targetKind, target, targetKind === 'variable' ? targetScope : undefined);
   if (resolved.kind === 'constant') {
     env.set(key, { value: resolved.value, valueType: resolved.valueType });
   } else {
@@ -139,7 +145,7 @@ export function constantPropagation(program: TACProgram): TACProgram {
         const value = targetType === undefined || substituted.valueType === targetType
           ? substituted
           : { ...substituted, valueType: targetType };
-        updateTarget(env, instruction.target, value);
+        updateTarget(env, instruction.target, value, instruction.targetKind ?? 'variable', instruction.targetScope);
         instructions.push(value === instruction.value ? instruction : { ...instruction, value });
         break;
       }
@@ -150,7 +156,7 @@ export function constantPropagation(program: TACProgram): TACProgram {
         const source = targetType === undefined || substituted.valueType === targetType
           ? substituted
           : { ...substituted, valueType: targetType };
-        updateTarget(env, instruction.target, source);
+        updateTarget(env, instruction.target, source, instruction.targetKind ?? 'variable', instruction.targetScope);
         instructions.push(
           source === instruction.source ? instruction : { ...instruction, source }
         );
@@ -227,5 +233,5 @@ export function constantPropagation(program: TACProgram): TACProgram {
     }
   }
 
-  return { instructions, temporaryCount: program.temporaryCount, functions: program.functions };
+  return { ...program, instructions, functions: program.functions };
 }

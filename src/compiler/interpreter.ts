@@ -1,4 +1,4 @@
-/** Execute the straight-line TAC supported by MiniC and collect print output. */
+/** Execute optimized MiniC TAC and collect print output. */
 import type { Operand, TACInstruction, TACProgram } from './ir/tac.ts';
 
 export type RuntimeValue = number | boolean;
@@ -8,11 +8,80 @@ export interface ExecutionResult {
   readonly returnValue?: RuntimeValue;
 }
 
-function readOperand(operand: Operand, values: Map<string, RuntimeValue>): RuntimeValue {
+interface ExecutionFrame {
+  /** Function parameters and locals. The top-level program uses the global map instead. */
+  readonly variables: Map<string, RuntimeValue>;
+  /** Compiler temporaries are isolated from user variables in every call frame. */
+  readonly temporaries: Map<string, RuntimeValue>;
+  readonly isMain: boolean;
+}
+
+function runtimeName(operand: Exclude<Operand, { kind: 'constant' }>): string {
+  return operand.name;
+}
+
+function readOperand(
+  operand: Operand,
+  frame: ExecutionFrame,
+  globals: Map<string, RuntimeValue>,
+  legacyTemporaryNames: ReadonlySet<string>,
+): RuntimeValue {
   if (operand.kind === 'constant') return operand.value;
-  const value = values.get(operand.kind === 'variable' ? operand.name : operand.name);
-  if (value === undefined) throw new Error(`Runtime value for '${operand.kind === 'variable' ? operand.name : operand.name}' is unavailable`);
-  return value;
+
+  if (operand.kind === 'temporary') {
+    const value = frame.temporaries.get(operand.name);
+    if (value !== undefined) return value;
+    // Compatibility with hand-built TAC from earlier versions, which shared
+    // one map for variables and temporaries.
+    if (legacyTemporaryNames.has(operand.name) && frame.variables.has(operand.name)) {
+      return frame.variables.get(operand.name)!;
+    }
+    throw new Error(`Runtime value for '${runtimeName(operand)}' is unavailable`);
+  }
+
+  if (operand.scope === 'global') {
+    const value = globals.get(operand.name);
+    if (value !== undefined) return value;
+  } else if (operand.scope === 'local') {
+    const value = frame.variables.get(operand.name);
+    if (value !== undefined) return value;
+  } else {
+    // Older TAC does not carry binding annotations. Prefer the active local
+    // frame, then fall back to globals; generated TAC always specifies scope.
+    const local = frame.variables.get(operand.name);
+    if (local !== undefined) return local;
+    const global = globals.get(operand.name);
+    if (global !== undefined) return global;
+  }
+
+  throw new Error(`Runtime value for '${runtimeName(operand)}' is unavailable`);
+}
+
+function isTemporaryTarget(
+  instruction: Extract<TACInstruction, { kind: 'assign' | 'copy' }>,
+  legacyTemporaryNames: ReadonlySet<string>,
+): boolean {
+  return instruction.targetKind === 'temporary' ||
+    (instruction.targetKind === undefined && legacyTemporaryNames.has(instruction.target));
+}
+
+function writeAssignmentTarget(
+  instruction: Extract<TACInstruction, { kind: 'assign' | 'copy' }>,
+  value: RuntimeValue,
+  frame: ExecutionFrame,
+  globals: Map<string, RuntimeValue>,
+  legacyTemporaryNames: ReadonlySet<string>,
+): void {
+  if (isTemporaryTarget(instruction, legacyTemporaryNames)) {
+    frame.temporaries.set(instruction.target, value);
+    return;
+  }
+
+  if (instruction.targetScope === 'global' || (instruction.targetScope === undefined && frame.isMain)) {
+    globals.set(instruction.target, value);
+  } else {
+    frame.variables.set(instruction.target, value);
+  }
 }
 
 function executeBinary(operator: TACInstruction & { kind: 'binary' }, left: RuntimeValue, right: RuntimeValue): RuntimeValue {
@@ -38,12 +107,42 @@ function executeBinary(operator: TACInstruction & { kind: 'binary' }, left: Runt
 }
 
 function formatRuntimeValue(value: RuntimeValue): string {
-  return typeof value === 'boolean' ? String(value) : String(value);
+  return String(value);
 }
 
-function executeInstructions(program: TACProgram, instructions: readonly TACInstruction[], initialValues: Map<string, RuntimeValue>, depth: number): ExecutionResult {
+function collectLegacyTemporaryNames(program: TACProgram): Set<string> {
+  const result = new Set<string>();
+  const instructions = [
+    ...program.instructions,
+    ...Object.values(program.functions ?? {}).flatMap((fn) => fn.instructions),
+  ];
+  for (let index = 1; index <= program.temporaryCount; index++) result.add(`t${index}`);
+  for (const instruction of instructions) {
+    if (instruction.kind === 'binary' || instruction.kind === 'unary' || instruction.kind === 'call') {
+      result.add(instruction.target);
+    }
+    const operands: Operand[] = instruction.kind === 'assign' ? [instruction.value]
+      : instruction.kind === 'copy' ? [instruction.source]
+      : instruction.kind === 'binary' ? [instruction.left, instruction.right]
+      : instruction.kind === 'unary' ? [instruction.operand]
+      : instruction.kind === 'print' || instruction.kind === 'return' ? [instruction.operand]
+      : instruction.kind === 'jumpIfFalse' ? [instruction.condition]
+      : instruction.kind === 'call' ? instruction.args
+      : [];
+    for (const operand of operands) if (operand.kind === 'temporary') result.add(operand.name);
+  }
+  return result;
+}
+
+function executeInstructions(
+  program: TACProgram,
+  instructions: readonly TACInstruction[],
+  frame: ExecutionFrame,
+  globals: Map<string, RuntimeValue>,
+  legacyTemporaryNames: ReadonlySet<string>,
+  depth: number,
+): ExecutionResult {
   if (depth > 100) throw new Error('Maximum function call depth exceeded');
-  const values = initialValues;
   const output: string[] = [];
   const labels = new Map<string, number>();
   instructions.forEach((instruction, index) => { if (instruction.kind === 'label') labels.set(instruction.label, index); });
@@ -52,36 +151,89 @@ function executeInstructions(program: TACProgram, instructions: readonly TACInst
     const instruction = instructions[pc]!;
     switch (instruction.kind) {
       case 'label': pc++; break;
-      case 'jump': { const target=labels.get(instruction.label); if(target===undefined) throw new Error(`Unknown label '${instruction.label}'`); pc=target; break; }
-      case 'jumpIfFalse': { const c=readOperand(instruction.condition,values); if(typeof c!=='boolean') throw new Error('Runtime if condition is not bool'); if(!c){const target=labels.get(instruction.label);if(target===undefined)throw new Error(`Unknown label '${instruction.label}'`);pc=target;}else pc++; break; }
-      case 'assign': { let v=readOperand(instruction.value,values); if(instruction.targetType==='float'&&typeof v==='number')v=Number(v); values.set(instruction.target,v); pc++; break; }
-      case 'copy': { let v=readOperand(instruction.source,values); if(instruction.targetType==='float'&&typeof v==='number')v=Number(v); values.set(instruction.target,v); pc++; break; }
-      case 'binary': { const v=executeBinary(instruction,readOperand(instruction.left,values),readOperand(instruction.right,values)); values.set(instruction.target,v); pc++; break; }
+      case 'jump': {
+        const target = labels.get(instruction.label);
+        if (target === undefined) throw new Error(`Unknown label '${instruction.label}'`);
+        pc = target;
+        break;
+      }
+      case 'jumpIfFalse': {
+        const condition = readOperand(instruction.condition, frame, globals, legacyTemporaryNames);
+        if (typeof condition !== 'boolean') throw new Error('Runtime if condition is not bool');
+        if (!condition) {
+          const target = labels.get(instruction.label);
+          if (target === undefined) throw new Error(`Unknown label '${instruction.label}'`);
+          pc = target;
+        } else pc++;
+        break;
+      }
+      case 'assign': {
+        let value = readOperand(instruction.value, frame, globals, legacyTemporaryNames);
+        if (instruction.targetType === 'float' && typeof value === 'number') value = Number(value);
+        writeAssignmentTarget(instruction, value, frame, globals, legacyTemporaryNames);
+        pc++;
+        break;
+      }
+      case 'copy': {
+        let value = readOperand(instruction.source, frame, globals, legacyTemporaryNames);
+        if (instruction.targetType === 'float' && typeof value === 'number') value = Number(value);
+        writeAssignmentTarget(instruction, value, frame, globals, legacyTemporaryNames);
+        pc++;
+        break;
+      }
+      case 'binary': {
+        const value = executeBinary(
+          instruction,
+          readOperand(instruction.left, frame, globals, legacyTemporaryNames),
+          readOperand(instruction.right, frame, globals, legacyTemporaryNames),
+        );
+        frame.temporaries.set(instruction.target, value);
+        pc++;
+        break;
+      }
       case 'unary': {
-        const v = readOperand(instruction.operand, values);
+        const value = readOperand(instruction.operand, frame, globals, legacyTemporaryNames);
         if (instruction.operator === '!') {
-          if (typeof v !== 'boolean') throw new Error('Runtime logical NOT on non-bool');
-          values.set(instruction.target, !v);
+          if (typeof value !== 'boolean') throw new Error('Runtime logical NOT on non-bool');
+          frame.temporaries.set(instruction.target, !value);
         } else {
-          if (typeof v !== 'number') throw new Error('Runtime unary minus on bool');
-          values.set(instruction.target, -v);
+          if (typeof value !== 'number') throw new Error('Runtime unary minus on bool');
+          frame.temporaries.set(instruction.target, -value);
         }
         pc++;
         break;
       }
-      case 'print': output.push(formatRuntimeValue(readOperand(instruction.operand,values))); pc++; break;
+      case 'print':
+        output.push(formatRuntimeValue(readOperand(instruction.operand, frame, globals, legacyTemporaryNames)));
+        pc++;
+        break;
       case 'call': {
-        const fn=program.functions?.[instruction.functionName]; if(!fn) throw new Error(`Undefined function '${instruction.functionName}'`);
-        if(instruction.args.length!==fn.parameters.length) throw new Error(`Function '${instruction.functionName}' expects ${fn.parameters.length} argument(s), got ${instruction.args.length}`);
-        const frame=new Map<string,RuntimeValue>();
-        for(let i=0;i<fn.parameters.length;i++) frame.set(fn.parameters[i]!.name,readOperand(instruction.args[i]!,values));
-        const nested=executeInstructions(program,fn.instructions,frame,depth+1);
+        const fn = program.functions?.[instruction.functionName];
+        if (!fn) throw new Error(`Undefined function '${instruction.functionName}'`);
+        if (instruction.args.length !== fn.parameters.length) throw new Error(`Function '${instruction.functionName}' expects ${fn.parameters.length} argument(s), got ${instruction.args.length}`);
+        const localValues = new Map<string, RuntimeValue>();
+        for (let index = 0; index < fn.parameters.length; index++) {
+          localValues.set(fn.parameters[index]!.name, readOperand(instruction.args[index]!, frame, globals, legacyTemporaryNames));
+        }
+        const nested = executeInstructions(
+          program,
+          fn.instructions,
+          { variables: localValues, temporaries: new Map<string, RuntimeValue>(), isMain: false },
+          globals,
+          legacyTemporaryNames,
+          depth + 1,
+        );
         output.push(...nested.output);
         if (fn.returnType === 'void' || instruction.targetType === 'void') { pc++; break; }
-        if(nested.returnValue===undefined) throw new Error(`Function '${instruction.functionName}' returned no value`);
-        values.set(instruction.target,nested.returnValue); pc++; break;
+        if (nested.returnValue === undefined) throw new Error(`Function '${instruction.functionName}' returned no value`);
+        frame.temporaries.set(instruction.target, nested.returnValue);
+        pc++;
+        break;
       }
-      case 'return': return instruction.targetType === 'void' ? { output } : { output, returnValue: readOperand(instruction.operand,values) };
+      case 'return':
+        return instruction.targetType === 'void'
+          ? { output }
+          : { output, returnValue: readOperand(instruction.operand, frame, globals, legacyTemporaryNames) };
       case 'param': case 'functionBegin': case 'functionEnd': pc++; break;
     }
   }
@@ -89,5 +241,14 @@ function executeInstructions(program: TACProgram, instructions: readonly TACInst
 }
 
 export function executeTAC(program: TACProgram): ExecutionResult {
-  return executeInstructions(program, program.instructions, new Map<string, RuntimeValue>(), 0);
+  const globals = new Map<string, RuntimeValue>();
+  const legacyTemporaryNames = collectLegacyTemporaryNames(program);
+  return executeInstructions(
+    program,
+    program.instructions,
+    { variables: new Map<string, RuntimeValue>(), temporaries: new Map<string, RuntimeValue>(), isMain: true },
+    globals,
+    legacyTemporaryNames,
+    0,
+  );
 }

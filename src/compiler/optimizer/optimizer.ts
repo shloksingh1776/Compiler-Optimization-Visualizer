@@ -119,20 +119,30 @@ function materializePrintedConstantsInInstructions(
   const constantEnv = new Map<string, { value: number | boolean; valueType?: import('../types.ts').MiniCType }>();
   const result: TACInstruction[] = [];
   const temporaryNames = new Set(Array.from({ length: temporaryCount }, (_, i) => `t${i + 1}`));
-  const keyForTarget = (target: string) => `${temporaryNames.has(target) ? 'temporary' : 'variable'}:${target}`;
+  const keyForOperand = (operand: import('../ir/tac.ts').Operand): string => operand.kind === 'constant'
+    ? `constant:${typeof operand.value}:${String(operand.value)}:${operand.valueType ?? ''}`
+    : operand.kind === 'temporary'
+      ? `temporary:${operand.name}`
+      : `variable:${operand.scope ?? 'unspecified'}:${operand.name}`;
+  const keyForTarget = (instruction: Extract<TACInstruction, { kind: 'assign' | 'copy' }>): string => {
+    const kind = instruction.targetKind ?? (temporaryNames.has(instruction.target) ? 'temporary' : 'variable');
+    return kind === 'temporary'
+      ? `temporary:${instruction.target}`
+      : `variable:${instruction.targetScope ?? 'unspecified'}:${instruction.target}`;
+  };
 
   for (const instruction of instructions) {
     switch (instruction.kind) {
       case 'assign': {
         const value = instruction.value.kind === 'constant'
           ? instruction.value
-          : constantEnv.get(`${instruction.value.kind}:${instruction.value.name}`);
+          : constantEnv.get(keyForOperand(instruction.value));
         if (value && typeof value !== 'undefined') {
           const constant = { kind: 'constant' as const, value: value.value, valueType: value.valueType };
-          constantEnv.set(keyForTarget(instruction.target), { value: constant.value, valueType: constant.valueType });
+          constantEnv.set(keyForTarget(instruction), { value: constant.value, valueType: constant.valueType });
           result.push({ ...instruction, value: constant });
         } else {
-          constantEnv.delete(keyForTarget(instruction.target));
+          constantEnv.delete(keyForTarget(instruction));
           result.push(instruction);
         }
         break;
@@ -140,13 +150,13 @@ function materializePrintedConstantsInInstructions(
       case 'copy': {
         const value = instruction.source.kind === 'constant'
           ? instruction.source
-          : constantEnv.get(`${instruction.source.kind}:${instruction.source.name}`);
+          : constantEnv.get(keyForOperand(instruction.source));
         if (value && typeof value !== 'undefined') {
           const constant = { kind: 'constant' as const, value: value.value, valueType: value.valueType };
-          constantEnv.set(keyForTarget(instruction.target), { value: constant.value, valueType: constant.valueType });
-          result.push({ kind: 'assign', target: instruction.target, targetType: instruction.targetType, value: constant, sourceNodeId: instruction.sourceNodeId });
+          constantEnv.set(keyForTarget(instruction), { value: constant.value, valueType: constant.valueType });
+          result.push({ kind: 'assign', target: instruction.target, targetKind: instruction.targetKind, targetScope: instruction.targetScope, targetType: instruction.targetType, value: constant, sourceNodeId: instruction.sourceNodeId });
         } else {
-          constantEnv.delete(keyForTarget(instruction.target));
+          constantEnv.delete(keyForTarget(instruction));
           result.push(instruction);
         }
         break;
@@ -154,7 +164,7 @@ function materializePrintedConstantsInInstructions(
       case 'return': {
         const value = instruction.operand.kind === 'constant'
           ? instruction.operand
-          : constantEnv.get(`${instruction.operand.kind}:${instruction.operand.name}`);
+          : constantEnv.get(keyForOperand(instruction.operand));
         result.push(value && typeof value !== 'undefined'
           ? { ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } }
           : instruction);
@@ -164,7 +174,7 @@ function materializePrintedConstantsInInstructions(
       case 'print': {
         const value = instruction.operand.kind === 'constant'
           ? instruction.operand
-          : constantEnv.get(`${instruction.operand.kind}:${instruction.operand.name}`);
+          : constantEnv.get(keyForOperand(instruction.operand));
         result.push(value && typeof value !== 'undefined'
           ? { ...instruction, operand: { kind: 'constant', value: value.value, valueType: value.valueType } }
           : instruction);
@@ -220,11 +230,12 @@ function materializePrintedConstantsInInstructions(
         : instruction.kind === 'call' ? instruction.args
         : [];
       for (const operand of reads) {
-        if (operand.kind !== 'constant') used.add(`${operand.kind}:${operand.name}`);
+        if (operand.kind !== 'constant') used.add(keyForOperand(operand));
       }
     }
     const next = filtered.filter((instruction) => {
-      if ((instruction.kind === 'assign' || instruction.kind === 'copy') && temporaryNames.has(instruction.target)) {
+      if ((instruction.kind === 'assign' || instruction.kind === 'copy') &&
+          (instruction.targetKind === 'temporary' || (instruction.targetKind === undefined && temporaryNames.has(instruction.target)))) {
         return used.has(`temporary:${instruction.target}`);
       }
       return true;

@@ -7,11 +7,10 @@
  * constant: several involve expressions over variables, so constant
  * propagation has real work to do before folding can happen.
  *
- * A structural note worth knowing when reading these: MiniC v1 has no
- * `if`/`while` and no external input, so a variable is only ever "unknown"
- * to constant propagation and algebraic simplification by never being
- * assigned a literal (directly or transitively) before it is used. The
- * `algebraic` and `dce-*` samples below are built around that fact.
+ * The catalog now spans expressions, control flow, functions, diagnostics,
+ * and combined demonstrations. Individual descriptions explain the feature
+ * or optimization each program is intended to demonstrate; some programs
+ * are deliberately invalid so the diagnostic views can be tested as well.
  */
 
 export interface Sample {
@@ -241,7 +240,7 @@ export const SAMPLES: readonly Sample[] = [
   },
   {
     id: 'dce-unused-variable',
-    title: 'Why a declared variable is never pruned',
+    title: "Why a variable's final write is preserved",
     category: 'Optimization',
     description:
       "unused's computed value is never read anywhere -- and yet it is kept. This is deliberate: MiniC has no print or return statement, so nothing can prove a declared variable's value is truly unobservable. This optimizer's dead code elimination is conservative on purpose: a declared variable's final write always survives, whatever its name suggests, so the visualizer never appears to erase a result the source program actually computed. Only a value that is provably overwritten before use (see the 'Dead code elimination' sample) is ever removed.",

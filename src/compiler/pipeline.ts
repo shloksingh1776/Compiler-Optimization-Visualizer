@@ -19,8 +19,8 @@
  *                             [ DIVISION-BY-ZERO CHECK ] (provably-zero divisors only)
  *                                                          |
  *                                          [ OPTIMIZER ]
- *                (constant propagation, folding, algebraic simplification,
- *                             dead code elimination)
+ *                 (constant propagation/folding, algebraic simplification,
+ *                    CSE, copy propagation, and dead code elimination)
  *                                                          |
  *                                                 optimized three address code
  *                                                          |
@@ -69,10 +69,11 @@ import type { Program } from './parser/ast.ts';
 import { analyze } from './semantic/analyzer.ts';
 import type { Symbol } from './semantic/symbolTable.ts';
 import { generateTAC } from './ir/tacGenerator.ts';
-import type { TACProgram } from './ir/tac.ts';
+import type { TACInstruction, TACProgram } from './ir/tac.ts';
 import { optimizeWithTrace } from './optimizer/optimizer.ts';
 import type { OptimizationTrace } from './optimizer/trace.ts';
 import { constantPropagation } from './optimizer/passes/constantPropagation.ts';
+import { constantFolding } from './optimizer/passes/constantFolding.ts';
 import { checkDivisionByZero } from './optimizer/divisionByZeroCheck.ts';
 import { compareTAC, type TACComparison } from './optimizer/comparison.ts';
 import type { CompilerError } from './errors.ts';
@@ -137,6 +138,8 @@ export interface CompilationResult {
   readonly returnValue?: number | boolean;
   /** Runtime diagnostic produced when a print() needs an unavailable value. */
   readonly runtimeError?: string;
+  /** Whether the interpreter ran for the current source. */
+  readonly executionStatus: 'executed' | 'not-needed' | 'not-run' | 'error';
   readonly lexicalErrors: CompilerError[];
   readonly syntaxErrors: CompilerError[];
   readonly semanticErrors: CompilerError[];
@@ -151,6 +154,38 @@ export interface CompilationResult {
   /** All errors, in pipeline order. */
   readonly errors: CompilerError[];
   readonly stageStatus: Readonly<Record<PipelineStage, StageStatus>>;
+}
+
+/**
+ * Run conservative propagation/folding over each independent TAC body only
+ * for the compile-time division-by-zero diagnostic. The normal six-pass
+ * optimizer and its displayed trace remain unchanged. Repeating these two
+ * simple passes lets a folded nested constant become visible to a later
+ * division without carrying facts across branch/loop boundaries.
+ */
+function prepareDivisionCheckTAC(tac: TACProgram): TACProgram {
+  const prepareInstructions = (initial: TACInstruction[]): TACInstruction[] => {
+    let current = initial;
+    for (let round = 0; round <= initial.length; round++) {
+      const before = JSON.stringify(current);
+      const propagated = constantPropagation({ instructions: current, temporaryCount: tac.temporaryCount });
+      const folded = constantFolding(propagated);
+      current = folded.instructions;
+      if (JSON.stringify(current) === before) break;
+    }
+    return current;
+  };
+
+  return {
+    ...tac,
+    instructions: prepareInstructions(tac.instructions),
+    functions: Object.fromEntries(
+      Object.entries(tac.functions ?? {}).map(([name, fn]) => [name, {
+        ...fn,
+        instructions: prepareInstructions(fn.instructions),
+      }]),
+    ),
+  };
 }
 
 /**
@@ -186,6 +221,7 @@ export function compile(source: string): CompilationResult {
       optimizationTrace: null,
       comparison: null,
       output: [],
+      executionStatus: 'not-run',
       lexicalErrors,
       syntaxErrors: [],
       semanticErrors: [],
@@ -218,6 +254,7 @@ export function compile(source: string): CompilationResult {
       optimizationTrace: null,
       comparison: null,
       output: [],
+      executionStatus: 'not-run',
       lexicalErrors: [],
       syntaxErrors,
       semanticErrors: [],
@@ -257,6 +294,7 @@ export function compile(source: string): CompilationResult {
       optimizationTrace: null,
       comparison: null,
       output: [],
+      executionStatus: 'not-run',
       lexicalErrors: [],
       syntaxErrors: [],
       semanticErrors: semantic.errors,
@@ -279,18 +317,14 @@ export function compile(source: string): CompilationResult {
   const tac = generateTAC(program);
 
   // --- Compile-time division-by-zero check ---
-  // Run constant propagation once, up front, purely to see whether it can
-  // prove any division's divisor is zero -- that is exactly the question
-  // `checkDivisionByZero` answers (see that file for why a literal `10 / 0`
-  // and a propagated `10 / y` with `y` known to be 0 are indistinguishable
-  // once propagation has run). `optimize()` below reruns constant
-  // propagation as its own first pass regardless: `constantPropagation` is a
-  // pure, side-effect-free function, so calling it twice on the same `tac`
-  // costs a little repeated work and changes nothing about the result --
-  // this keeps `optimize()`'s existing signature and pass order completely
-  // untouched rather than threading errors through it.
-  const hasControlFlow = tac.instructions.some((instruction) => instruction.kind === 'label' || instruction.kind === 'jump' || instruction.kind === 'jumpIfFalse');
-  const divisionByZeroErrors = checkDivisionByZero(hasControlFlow ? tac : constantPropagation(tac), program);
+  // Prepare a diagnostic-only copy of the TAC by conservatively repeating
+  // constant propagation and folding within each independent TAC body. This
+  // catches known-zero divisors in functions and nested constant expressions,
+  // while labels, jumps, and calls remain barriers inside the existing passes.
+  // The normal optimization trace and pass order are not changed by this
+  // precheck; it only decides whether a compile-time division-by-zero error
+  // must be reported before normal optimization/execution.
+  const divisionByZeroErrors = checkDivisionByZero(prepareDivisionCheckTAC(tac), program);
 
   if (divisionByZeroErrors.length > 0) {
     // A proven division by zero makes the program invalid, the same way an
@@ -309,6 +343,7 @@ export function compile(source: string): CompilationResult {
       optimizationTrace: null,
       comparison: null,
       output: [],
+      executionStatus: 'not-run',
       lexicalErrors: [],
       syntaxErrors: [],
       semanticErrors: [],
@@ -334,20 +369,18 @@ export function compile(source: string): CompilationResult {
   // means and why it is not just an instruction-count check.
   const comparison = compareTAC(tac, optimizedTac);
 
-  // Execution is only needed for programs containing print(). Existing
-  // compiler tests intentionally use undeclared/uninitialized variables in
-  // otherwise valid TAC examples; attempting to execute those programs would
-  // introduce a runtime concern that Stage 5 did not intend to add.
-  const allInstructions = [
-    ...optimizedTac.instructions,
-    ...Object.values(optimizedTac.functions ?? {}).flatMap((fn) => fn.instructions),
-  ];
-  const hasPrint = allInstructions.some((instruction) => instruction.kind === 'print');
-  const hasReturn = allInstructions.some((instruction) => instruction.kind === 'return');
+  // Run the interpreter only when the top-level program has an observable
+  // execution trigger. A return or print buried in an uncalled function does
+  // not mean that function was executed. Calls are included because functions
+  // may print or mutate globals as side effects.
+  const hasExecutionTrigger = optimizedTac.instructions.some((instruction) =>
+    instruction.kind === 'print' || instruction.kind === 'return' || instruction.kind === 'call');
   let output: string[] = [];
   let returnValue: number | boolean | undefined;
   let runtimeError: string | undefined;
-  if (hasPrint || hasReturn) {
+  let executionStatus: CompilationResult['executionStatus'] = 'not-needed';
+  if (hasExecutionTrigger) {
+    executionStatus = 'executed';
     try {
       const execution = executeTAC(optimizedTac);
       output = execution.output;
@@ -357,6 +390,7 @@ export function compile(source: string): CompilationResult {
       // A later print of such a variable is a runtime problem, not a reason
       // for the entire compiler UI to crash or go blank.
       runtimeError = error instanceof Error ? error.message : String(error);
+      executionStatus = 'error';
     }
   }
 
@@ -371,6 +405,7 @@ export function compile(source: string): CompilationResult {
     optimizationTrace: optimization.trace,
     comparison,
     output,
+    executionStatus,
     ...(returnValue !== undefined ? { returnValue } : {}),
     ...(runtimeError ? { runtimeError } : {}),
     lexicalErrors: [],

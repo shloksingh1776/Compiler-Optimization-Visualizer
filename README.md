@@ -73,7 +73,7 @@ isolation:
 | Dead code elimination | An overwritten assignment and its arithmetic both removed |
 | Dead code: a whole chain removed at once | A chain of temporaries collapsing in one backward pass |
 | Fold vs. simplify | Why the same-looking `x * 1` can be resolved by either folding or simplification, depending on whether `x` is a known constant |
-| Why a declared variable is never pruned | The conservative dead-code-elimination policy, deliberately demonstrated on a variable named `unused` |
+| Why a variable's final write is preserved | The conservative dead-code-elimination policy, deliberately demonstrated on a variable named `unused` |
 | Lexical error / Syntax error / Semantic error | Each error stage in isolation, showing that later stages are correctly skipped |
 
 Every example's source is real MiniC v1 -- there is nothing hardcoded or
@@ -95,17 +95,17 @@ int e = -5;        // unary minus
 int f = 100 / 4;   // integer division
 ```
 
-**Supported:** `int`, `float`, `bool`, and `void` function return types; integer and floating-point literals; `true`/`false`; arithmetic `+ - * / %`; comparisons `< > <= >= == !=`; logical `&& || !`; unary minus; parentheses; `if`/`else`; `while` and `for` loops; loop-local `break` and `continue`; value-returning and void functions with parameters; `return expression;` and `return;` in void functions; standalone function calls; `print`; `//` comments; and semicolon-terminated statements.
+**Supported:** `int`, `float`, `bool`, and `void` function return types; integer and floating-point literals; `true`/`false`; arithmetic `+ - * / %`; comparisons `< > <= >= == !=`; logical `&& || !`; unary minus; parentheses; `if`/`else`; `while` and `for` loops; loop-local `break` and `continue`; `switch`/`case`/`default`; value-returning and void functions with parameters; `return expression;` and `return;` in void functions; standalone function calls; `print`; `//` comments; compound assignments; increment/decrement; ternary expressions; and semicolon-terminated statements.
 
-**Not in the current scope:** arrays, pointers, strings, classes/structs, `do-while`, `switch/case`, or a full C/C++ language implementation.
+**Not in the current scope:** arrays, pointers, strings, classes/structs, `do-while`, and a full C/C++ language implementation.
 
-The language now includes control flow and void functions. The TAC generator uses labels and jumps for `if`/`else`, loops, and short-circuit logical operators. Void calls execute for their side effects without producing a usable expression value. Optimization remains conservative around control-flow boundaries.
+The language includes control flow and void functions. The TAC generator uses labels and jumps for `if`/`else`, loops, switch dispatch, ternary expressions, and short-circuit logical operators. Void calls execute for their side effects without producing a usable expression value. Optimization remains conservative around control-flow boundaries.
 
 ---
 
-## Grammar
+## Grammar overview
 
-LL(1), unambiguous, with no left recursion.
+The grammar below documents the core declaration, assignment, and arithmetic-expression subset. It is not a complete grammar specification for every implemented feature; the recursive-descent parser also supports functions, calls, types, control flow, loops, switch/case, ternary expressions, logical operators, and return statements.
 
 ```ebnf
 program      -> statement* EOF
@@ -134,19 +134,16 @@ left recursion in the arithmetic grammar.
 
 ## Semantic rules
 
-The current MiniC subset has function-local scopes. Top-level variables are global,
-and each function gets a separate local symbol table for parameters and local variables.
-Block statements reuse the surrounding function scope.
+MiniC has one global scope for top-level variables and a separate local scope for each function's parameters and local variables. A function resolves a name in this order: its parameters and locals first, then the global scope. Therefore, a local or parameter may shadow a global of the same name. A global read or write from a function refers to the shared global variable, and writes persist after the function returns. Block statements reuse the surrounding function scope; nested blocks do not create separate scopes.
 
-1. A declaration (`int a;` or `int a = 10;`) adds `a` to the symbol table.
-2. Declaring the same name twice is a semantic error. The original symbol is kept.
-3. Every identifier used in a declaration's initializer must already be declared.
+1. A declaration (`int a;` or `int a = 10;`) adds `a` to its current scope.
+2. Redeclaring a name in the same scope is a semantic error. A function-local declaration may shadow a global.
+3. Initializers are checked before the new declaration enters its scope. If a local has the same name as a global, `int a = a + 1;` reads the visible global in its initializer, then declares the local `a`.
 4. Assigning to an undeclared variable is a semantic error.
-5. Every identifier used anywhere must resolve to a declared symbol.
+5. Every identifier used in an expression must resolve to a local/parameter or a global symbol.
+6. Function calls can mutate globals, so their side effects are retained by conservative optimization and shared by subsequent calls.
 
-For a declaration with an initializer, the initializer is checked *before* the new
-name is entered into the table. That ordering is what makes `int a = a + 1;` an
-error: at the moment the initializer is checked, `a` does not exist yet.
+An uninitialized local shadows a same-named global but does not inherit its value. Reading that local before assigning it remains a runtime error.
 
 ---
 
@@ -310,7 +307,7 @@ src/
       parser.ts        recursive descent parser
     pipeline.ts        runs the phases in order
     semantic/
-      symbolTable.ts   single flat symbol table
+      symbolTable.ts   one flat table per global/function scope
       analyzer.ts      walks the AST, builds the table, checks the rules
     ir/
       tac.ts           TAC instruction and operand types
@@ -324,25 +321,34 @@ src/
         constantPropagation.ts    substitutes known constants, never evaluates
         constantFolding.ts        evaluates fully-constant operations only
         algebraicSimplification.ts  the six approved identities only
-        deadCodeElimination.ts    backward liveness, no CFG needed
+        deadCodeElimination.ts    basic-block liveness with control-flow edges
     errors.ts          shared error record for all stages
     index.ts           public API of the compiler
   components/
     AstView.tsx        renders the syntax tree
-    SymbolTableView.tsx renders the declared variables
-    TacView.tsx        renders TAC (reused for both original and optimized)
+    SymbolTableView.tsx renders global and per-function symbols
+    TacView.tsx        renders original and optimized TAC
     OptimizationPanel.tsx  pass list + before/after stats
-    ErrorPanel.tsx     lexical, syntax and semantic errors, grouped
+    OptimizationTraceView.tsx pass-by-pass TAC snapshots
+    TokenInspector.tsx interactive tokens with category filters
+    ErrorPanel.tsx     categorized diagnostics with source navigation
+    CompilerPipeline.tsx selectable compiler-phase pipeline
+    CodeEditor.tsx     syntax-highlighted editable source
+    pipelineUtils.ts   derives pipeline states from compiler results
+    diagnosticUtils.ts source-range validation and navigation helpers
+    tokenInspectorUtils.ts token categories, filtering, and selection
     astTree.ts         tree layout (pure TypeScript, no React)
   examples/samples.ts  demo programs
   App.tsx  main.tsx  index.css
 tests/
-  lexer.test.ts
-  parser.test.ts
-  pipeline.test.ts
-  semantic.test.ts
-  tac.test.ts
-  optimizer.test.ts
+  lexer.test.ts, parser.test.ts, semantic.test.ts, tac.test.ts
+  optimizer.test.ts, pipeline.test.ts
+  stage23-code-editor.test.ts
+  stage24-optimization-coverage.test.ts
+  stage25-token-inspector.test.ts
+  stage26-source-linked-diagnostics.test.ts
+  stage27-interactive-pipeline.test.ts
+  stage27-maintenance-corrections.test.ts
 ```
 
 ---
@@ -388,6 +394,8 @@ propagation clear their caches at control-flow boundaries. DCE computes liveness
 across branch and jump successors rather than assuming straight-line execution.
 See Stage 24 below for the full coverage changes.
 
+
+Historical note: the original compiler/language milestone numbers in the implementation history below are separate from the later UI-enhancement roadmap. The current enhancement sequence reached Stage 7 with the Interactive Compiler Pipeline; Stage 8 in that roadmap is Workspace and UI Polish.
 
 ## Stage 7: Return Statements
 
@@ -464,10 +472,11 @@ The current enhancement roadmap is tracked separately from the original compiler
 | 2 | Example Program Selector | Complete |
 | 3 | Professional Source Code Editor | Complete |
 | 4 | Complete Optimization Coverage | Complete |
-| 5 | Interactive Token Inspector | Implemented in this version; verify locally |
-| 6 | Source-Linked Diagnostics | Upcoming |
-| 7 | Interactive Compiler Pipeline | Upcoming |
-| 8 | Workspace and UI Polish | Upcoming |
+| 5 | Interactive Token Inspector | Complete after local verification |
+| 6 | Source-Linked Diagnostics | Complete after local verification |
+| 7 | Interactive Compiler Pipeline | Complete after local verification |
+| 8 | Workspace and UI Polish | Implemented in Stage 28; verify locally |
+| 9 | Optimization Diff View | Planned |
 
 The Interactive Token Inspector displays the actual lexer stream, with search and category-based filters. Related tokens are grouped as arithmetic, relational, logical, and assignment operators, keywords, identifiers, constants, punctuation/delimiters, and end of input; the table still shows each exact lexer token type. Selecting a token's lexeme navigates to its source location and highlights the exact lexer-provided offset range in the editor. The EOF token is shown explicitly; because its true lexeme is empty, selecting it moves the editor caret to the end of input instead of highlighting invented characters. No compiler semantics or tokenization rules are changed.
 
@@ -478,3 +487,29 @@ The Errors / Diagnostics panel groups messages by lexical analysis, syntax analy
 Editing source or loading a different example clears the old diagnostic selection. A zero-length compiler span (such as an error at end of input) moves the caret to the reported position without highlighting invented characters. Runtime messages are separated from compile-time diagnostics; the current interpreter only supplies a message string for runtime errors, so the UI explicitly does not invent a source location or navigation link for them.
 
 Stage 26 adds a focused test file at `tests/stage26-source-linked-diagnostics.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` to verify the change with the project's full toolchain.
+
+## Stage 27 — Interactive Compiler Pipeline
+
+The interactive pipeline shows Source, Lexer, Parser, Semantic Analysis, TAC Generation, Optimization, and Output as connected selectable phases. Each phase's state and summary are derived from the existing `compile(source)` result. Selecting a phase scrolls to its corresponding result already shown in the workspace; it does not rerun compilation or fabricate an intermediate result. Failed phases and stages skipped after an earlier failure are distinguished from successful completion.
+
+## Stage 27.1 — Pre-polish maintenance corrections
+
+Before the final workspace/UI polish, a maintenance revision aligns the implementation and documentation around three behaviors:
+
+- Compile-time division-by-zero checking runs a conservative constant-propagation/folding precheck over the main TAC and each function body. It reports divisors proved to be zero while retaining control-flow barriers to avoid carrying facts across branches or loops.
+- The interactive pipeline distinguishes Output that executed from Output that was not needed, and navigates to the Return Value view when a program returns a value without printing output.
+- Top-level variables are accessible from function bodies. Function-local variables and parameters take precedence over globals with the same name, global writes persist across calls, and optimizer passes preserve that scope information in TAC. DCE conservatively retains global writes inside function bodies and treats globals as implicit live-ins at calls in the main program, while still removing overwritten global assignments that no read or call can observe.
+
+The maintenance stage does not introduce block-level scope, arrays, pointers, or other new language features. Automated regression coverage for these corrections lives in `tests/stage27-maintenance-corrections.test.ts`.
+
+
+
+## Stage 28 — Workspace and UI Polish
+
+The application now presents the source editor and analysis workspace in a resizable two-pane layout on wider screens, with a responsive stacked layout on smaller screens. The separator supports pointer dragging and keyboard controls (`Left`/`Right`, `Home`, `End`) and clamps the editor ratio to keep both panels usable.
+
+The workspace groups Tokens, AST, Symbols, Original TAC, Optimization Trace and Statistics, Output/Return Value, and Diagnostics into keyboard-navigable tabs. Tabs preserve their mounted view state; selecting a compiler pipeline phase activates the corresponding result tab before scrolling to its real result. Failed or skipped phases route to Diagnostics. Switching tabs does not rerun compilation; `compile(source)` remains memoized by source text.
+
+A dark theme remains the default and an optional light theme is available from the header. The preference is stored in local storage when available, and the source editor receives a matching high-contrast light styling while preserving the separate token (blue) and diagnostic (red) highlights. Layout, panel headings, tabs, borders, status chips, and responsive spacing were standardized without adding dependencies or changing compiler semantics.
+
+Tests for the workspace helpers are in `tests/stage28-workspace-ui.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.

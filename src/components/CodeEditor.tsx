@@ -8,6 +8,7 @@ interface CodeEditorProps {
   tokenHighlight?: { start: number; end: number } | null;
   diagnosticHighlight?: { start: number; end: number } | null;
   navigationRequestId?: number;
+  theme?: 'dark' | 'light';
 }
 
 /** A lightweight, dependency-free MiniC editor with a highlighted mirror. */
@@ -18,6 +19,7 @@ export default function CodeEditor({
   tokenHighlight = null,
   diagnosticHighlight = null,
   navigationRequestId = 0,
+  theme = 'dark',
 }: CodeEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const previousSourceRef = useRef(source);
@@ -140,7 +142,7 @@ export default function CodeEditor({
   };
 
   return (
-    <div className="code-editor" data-testid="code-editor">
+    <div className={`code-editor${theme === 'light' ? ' code-editor--light' : ''}`} data-testid="code-editor">
       <div className="code-editor__gutter" aria-hidden="true">
         <div
           className="code-editor__gutter-inner"

@@ -15,8 +15,12 @@
  * prints, returns, parameter bindings, and control-flow instructions are kept.
  * For the main program, the final write to a non-temporary variable is
  * preserved for compatibility with the visualizer's variable-state model.
- * Function locals have no such externally visible final state, so unused
- * local assignments may be removed unless they feed a return/print/call.
+ * In a function body, global writes are retained conservatively because the
+ * pass does not perform interprocedural liveness. In the main program, calls
+ * make global values implicit live-ins, including across basic-block edges:
+ * an overwritten write is removable only when no read or call can observe it.
+ * Function-local assignments may be removed when their values are not needed
+ * by a return, print, call, or another live computation.
  */
 
 import type { Operand, TACInstruction, TACProgram } from '../../ir/tac.ts';
@@ -42,17 +46,24 @@ function operandsOf(instruction: TACInstruction): Operand[] {
 function usedNames(instruction: TACInstruction): string[] {
   return operandsOf(instruction)
     .filter((operand) => operand.kind !== 'constant')
-    .map((operand) => operand.name);
+    .map((operand) => operand.kind === 'temporary'
+      ? `temporary:${operand.name}`
+      : `variable:${operand.scope ?? 'unspecified'}:${operand.name}`);
 }
 
-function writtenName(instruction: TACInstruction): string | undefined {
+function writtenName(instruction: TACInstruction, temporaryNames: ReadonlySet<string> = new Set()): string | undefined {
   switch (instruction.kind) {
     case 'assign':
-    case 'copy':
+    case 'copy': {
+      const kind = instruction.targetKind ?? (temporaryNames.has(instruction.target) ? 'temporary' : 'variable');
+      return kind === 'temporary'
+        ? `temporary:${instruction.target}`
+        : `variable:${instruction.targetScope ?? 'unspecified'}:${instruction.target}`;
+    }
     case 'binary':
     case 'unary':
-    case 'call': return instruction.target;
-    case 'param': return instruction.name;
+    case 'call': return `temporary:${instruction.target}`;
+    case 'param': return `variable:local:${instruction.name}`;
     case 'print':
     case 'return':
     case 'label':
@@ -78,7 +89,11 @@ function isTerminator(instruction: TACInstruction): boolean {
     instruction.kind === 'return' || instruction.kind === 'functionEnd';
 }
 
-function buildBasicBlocks(instructions: readonly TACInstruction[]): BasicBlock[] {
+function buildBasicBlocks(
+  instructions: readonly TACInstruction[],
+  temporaryNames: ReadonlySet<string>,
+  globalsMayBeReadAtCalls: ReadonlySet<string>,
+): BasicBlock[] {
   if (instructions.length === 0) return [];
 
   const starts = new Set<number>([0]);
@@ -138,7 +153,18 @@ function buildBasicBlocks(instructions: readonly TACInstruction[]): BasicBlock[]
       for (const name of usedNames(instruction)) {
         if (!block.def.has(name)) block.use.add(name);
       }
-      const written = writtenName(instruction);
+      // A function call may read any global. Model those as implicit uses in
+      // the block dataflow as well as during the backwards rewrite below, so
+      // global liveness propagates correctly across branch/basic-block edges.
+      // They are not modeled as definite definitions: a callee may leave a
+      // particular global unchanged, so a live-out value may still depend on
+      // the value that existed before the call.
+      if (instruction.kind === 'call') {
+        for (const name of globalsMayBeReadAtCalls) {
+          if (!block.def.has(name)) block.use.add(name);
+        }
+      }
+      const written = writtenName(instruction, temporaryNames);
       if (written !== undefined) block.def.add(written);
     }
   }
@@ -179,6 +205,8 @@ function dceInstructionSequence(
   instructions: readonly TACInstruction[],
   temporaryCount: number,
   preserveFinalVariableWrites: boolean,
+  preserveGlobalWrites = false,
+  globalsMayBeReadAtCalls: ReadonlySet<string> = new Set<string>(),
 ): TACInstruction[] {
   if (instructions.length === 0) return [];
 
@@ -188,13 +216,16 @@ function dceInstructionSequence(
   const lastWriteOfVariable = new Map<string, number>();
   for (let i = 0; i < instructions.length; i++) {
     const instruction = instructions[i]!;
-    const target = writtenName(instruction);
-    if (preserveFinalVariableWrites && target !== undefined && instruction.kind !== 'param' && !temporaryNames.has(target)) {
+    const target = writtenName(instruction, temporaryNames);
+    const isVariableTarget = instruction.kind === 'assign' || instruction.kind === 'copy'
+      ? instruction.targetKind !== 'temporary' && (instruction.targetKind === 'variable' || !temporaryNames.has(instruction.target))
+      : false;
+    if (preserveFinalVariableWrites && target !== undefined && isVariableTarget && instruction.kind !== 'param') {
       lastWriteOfVariable.set(target, i);
     }
   }
 
-  const blocks = buildBasicBlocks(instructions);
+  const blocks = buildBasicBlocks(instructions, temporaryNames, globalsMayBeReadAtCalls);
   solveLiveness(blocks);
   const keep = new Array<boolean>(instructions.length).fill(false);
 
@@ -205,7 +236,7 @@ function dceInstructionSequence(
 
       if (instruction.kind === 'param') {
         keep[i] = true;
-        live.delete(instruction.name);
+        live.delete(`variable:local:${instruction.name}`);
         continue;
       }
 
@@ -217,10 +248,15 @@ function dceInstructionSequence(
 
       if (instruction.kind === 'call') {
         // A call may have observable effects even if its return value is dead.
-        // Kill its result's old value, then keep its arguments live.
+        // Kill its result's old value, then keep its arguments live. A called
+        // function may read or modify any global, so those values must also be
+        // live before the call. This allows us to remove overwritten global
+        // writes when no call can observe them, without deleting the last
+        // global value written before a call.
         keep[i] = true;
-        live.delete(instruction.target);
+        live.delete(`temporary:${instruction.target}`);
         for (const name of usedNames(instruction)) live.add(name);
+        for (const name of globalsMayBeReadAtCalls) live.add(name);
         continue;
       }
 
@@ -236,7 +272,7 @@ function dceInstructionSequence(
         continue;
       }
 
-      const target = writtenName(instruction);
+      const target = writtenName(instruction, temporaryNames);
       if (target === undefined) {
         // Defensive fallback: an unrecognized/non-writing TAC operation is
         // retained rather than silently discarded.
@@ -245,9 +281,11 @@ function dceInstructionSequence(
         continue;
       }
 
-      const isFinalVariableWrite = preserveFinalVariableWrites &&
-        !temporaryNames.has(target) && lastWriteOfVariable.get(target) === i;
-      if (live.has(target) || isFinalVariableWrite) {
+      const isGlobalWrite = preserveGlobalWrites &&
+        (instruction.kind === 'assign' || instruction.kind === 'copy') &&
+        instruction.targetKind !== 'temporary' && instruction.targetScope === 'global';
+      const isFinalVariableWrite = preserveFinalVariableWrites && lastWriteOfVariable.get(target) === i;
+      if (live.has(target) || isFinalVariableWrite || isGlobalWrite) {
         keep[i] = true;
         live.delete(target);
         for (const name of usedNames(instruction)) live.add(name);
@@ -261,16 +299,50 @@ function dceInstructionSequence(
 
 /** Run DCE on main TAC and independently on every function body. */
 export function deadCodeElimination(program: TACProgram): TACProgram {
+  // Prefer the declaration metadata, but also derive globals from scoped TAC
+  // operands/targets. TACProgram.globalVariables is optional for backwards
+  // compatibility with hand-built TAC fixtures.
+  const globalNamesByName = new Set(program.globalVariables ?? []);
+  const collectGlobals = (instructions: readonly TACInstruction[]) => {
+    for (const instruction of instructions) {
+      for (const operand of operandsOf(instruction)) {
+        if (operand.kind === 'variable' && operand.scope === 'global') {
+          globalNamesByName.add(operand.name);
+        }
+      }
+      if ((instruction.kind === 'assign' || instruction.kind === 'copy') &&
+          instruction.targetScope === 'global') {
+        globalNamesByName.add(instruction.target);
+      }
+    }
+  };
+  collectGlobals(program.instructions);
+  for (const fn of Object.values(program.functions ?? {})) collectGlobals(fn.instructions);
+
+  const globalNames = new Set(
+    [...globalNamesByName].map((name) => `variable:global:${name}`),
+  );
   const functions = Object.fromEntries(
     Object.entries(program.functions ?? {}).map(([name, fn]) => [name, {
       ...fn,
-      instructions: dceInstructionSequence(fn.instructions, program.temporaryCount, false),
+      instructions: dceInstructionSequence(fn.instructions, program.temporaryCount, false, true, globalNames),
     }]),
   );
 
   return {
     ...program,
-    instructions: dceInstructionSequence(program.instructions, program.temporaryCount, true),
+    // Preserve a main-program variable's final write for the visualizer's
+    // variable-state model. Earlier overwritten writes can still be removed,
+    // except when a function call may observe the value between writes. At
+    // each call, globals become live conservatively because this pass does not
+    // perform interprocedural read/write analysis.
+    instructions: dceInstructionSequence(
+      program.instructions,
+      program.temporaryCount,
+      true,
+      false,
+      globalNames,
+    ),
     functions,
   };
 }

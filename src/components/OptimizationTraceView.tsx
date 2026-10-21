@@ -1,14 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { OptimizationTrace } from '../compiler/index.ts';
 import TacView from './TacView.tsx';
 
 interface OptimizationTraceViewProps {
   trace: OptimizationTrace | null;
   ran: boolean;
+  focusRequest?: { stepId: string; requestId: number } | null;
 }
 
-export default function OptimizationTraceView({ trace, ran }: OptimizationTraceViewProps) {
+export default function OptimizationTraceView({ trace, ran, focusRequest }: OptimizationTraceViewProps) {
   const [selectedId, setSelectedId] = useState('original');
+
+  useEffect(() => {
+    if (focusRequest) setSelectedId(focusRequest.stepId);
+  }, [focusRequest?.requestId, focusRequest?.stepId]);
 
   const selectedIndex = trace?.steps.findIndex((step) => step.id === selectedId) ?? -1;
   const selected = useMemo(
