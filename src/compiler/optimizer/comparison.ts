@@ -36,12 +36,12 @@
  * test suite.
  */
 
-import type { Operand, TACInstruction, TACProgram } from '../ir/tac.ts';
+import type { Operand, TACFunction, TACInstruction, TACProgram } from '../ir/tac.ts';
 
-/** Structural equality between two operands, ignoring nothing -- every field matters here. */
+/** Structural equality between operands, including global/local variable scope. */
 function operandEqual(a: Operand, b: Operand): boolean {
   if (a.kind === 'constant' && b.kind === 'constant') return a.value === b.value && a.valueType === b.valueType;
-  if (a.kind === 'variable' && b.kind === 'variable') return a.name === b.name && a.valueType === b.valueType;
+  if (a.kind === 'variable' && b.kind === 'variable') return a.name === b.name && a.valueType === b.valueType && a.scope === b.scope;
   if (a.kind === 'temporary' && b.kind === 'temporary') return a.name === b.name && a.valueType === b.valueType;
   return false; // different kinds
 }
@@ -51,9 +51,9 @@ function instructionEqual(a: TACInstruction, b: TACInstruction): boolean {
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case 'assign':
-      return b.kind === 'assign' && a.target === b.target && a.targetType === b.targetType && operandEqual(a.value, b.value);
+      return b.kind === 'assign' && a.target === b.target && a.targetKind === b.targetKind && a.targetScope === b.targetScope && a.targetType === b.targetType && operandEqual(a.value, b.value);
     case 'copy':
-      return b.kind === 'copy' && a.target === b.target && a.targetType === b.targetType && operandEqual(a.source, b.source);
+      return b.kind === 'copy' && a.target === b.target && a.targetKind === b.targetKind && a.targetScope === b.targetScope && a.targetType === b.targetType && operandEqual(a.source, b.source);
     case 'binary':
       return b.kind === 'binary' && a.target === b.target && a.targetType === b.targetType && a.operator === b.operator && operandEqual(a.left, b.left) && operandEqual(a.right, b.right);
     case 'unary':
@@ -67,7 +67,7 @@ function instructionEqual(a: TACInstruction, b: TACInstruction): boolean {
     case 'jumpIfFalse':
       return b.kind === 'jumpIfFalse' && a.label === b.label && operandEqual(a.condition, b.condition);
     case 'return':
-      return b.kind === 'return' && operandEqual(a.operand, b.operand);
+      return b.kind === 'return' && a.targetType === b.targetType && operandEqual(a.operand, b.operand);
     case 'call':
       return b.kind === 'call' && a.target === b.target && a.targetType === b.targetType && a.functionName === b.functionName && a.args.length === b.args.length && a.args.every((arg, i) => operandEqual(arg, b.args[i]!));
     case 'param':
@@ -79,24 +79,53 @@ function instructionEqual(a: TACInstruction, b: TACInstruction): boolean {
   }
 }
 
+/**
+ * Compare two TAC instructions while ignoring only AST provenance (`sourceNodeId`).
+ * Scope and target-kind metadata are included because a same-named local and global
+ * variable are not interchangeable. Exported so the diff view and summary share one
+ * definition of instruction equality.
+ */
+export function tacInstructionsEqual(a: TACInstruction, b: TACInstruction): boolean {
+  return instructionEqual(a, b);
+}
+
 /** True if two TAC instruction lists are instruction-for-instruction identical, in order. */
 function instructionListEqual(a: readonly TACInstruction[], b: readonly TACInstruction[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (!instructionEqual(a[i]!, b[i]!)) return false;
+    if (!tacInstructionsEqual(a[i]!, b[i]!)) return false;
   }
   return true;
 }
 
 /** True if two complete TAC programs, including all function bodies, are structurally identical. */
+function sameStringSet(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  const left = [...(a ?? [])].sort();
+  const right = [...(b ?? [])].sort();
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function functionMetadataEqual(a: TACFunction, b: TACFunction): boolean {
+  return a.name === b.name
+    && a.returnType === b.returnType
+    && a.parameters.length === b.parameters.length
+    && a.parameters.every((parameter, index) => {
+      const other = b.parameters[index];
+      return Boolean(other && parameter.name === other.name && parameter.type === other.type);
+    })
+    && sameStringSet(a.localVariables, b.localVariables);
+}
+
 function tacEqual(a: TACProgram, b: TACProgram): boolean {
   if (!instructionListEqual(a.instructions, b.instructions)) return false;
+  if (!sameStringSet(a.globalVariables, b.globalVariables)) return false;
   const af = a.functions ?? {};
   const bf = b.functions ?? {};
   const namesA = Object.keys(af).sort();
   const namesB = Object.keys(bf).sort();
   if (namesA.length !== namesB.length || namesA.some((name, i) => name !== namesB[i])) return false;
-  return namesA.every((name) => instructionListEqual(af[name]!.instructions, bf[name]!.instructions));
+  return namesA.every((name) => functionMetadataEqual(af[name]!, bf[name]!)
+    && instructionListEqual(af[name]!.instructions, bf[name]!.instructions));
 }
 
 function instructionCount(program: TACProgram): number {
@@ -120,9 +149,9 @@ export interface TACComparison {
    */
   readonly removedInstructionCount: number;
   /**
-   * True if the optimized program differs from the original in ANY way --
-   * including a same-count rewrite such as `c * 1` becoming `c`. False only
-   * when every instruction is structurally identical, in the same order.
+   * True if the optimized program differs in a TAC instruction or semantically
+   * relevant scope/function metadata -- including a same-count rewrite such as
+   * `c * 1` becoming `c`. Source-node provenance alone is ignored.
    */
   readonly changed: boolean;
   readonly originalTemporaryCount: number;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { OptimizationTrace } from '../compiler/index.ts';
+import { compareTAC, type OptimizationTrace } from '../compiler/index.ts';
 import TacView from './TacView.tsx';
+import OptimizationDiffView from './OptimizationDiffView.tsx';
 
 interface OptimizationTraceViewProps {
   trace: OptimizationTrace | null;
@@ -10,9 +11,14 @@ interface OptimizationTraceViewProps {
 
 export default function OptimizationTraceView({ trace, ran, focusRequest }: OptimizationTraceViewProps) {
   const [selectedId, setSelectedId] = useState('original');
+  const [displayMode, setDisplayMode] = useState<'snapshot' | 'diff'>('snapshot');
 
   useEffect(() => {
-    if (focusRequest) setSelectedId(focusRequest.stepId);
+    if (focusRequest) {
+      setSelectedId(focusRequest.stepId);
+      // Pipeline navigation has historically opened the requested TAC snapshot.
+      setDisplayMode('snapshot');
+    }
   }, [focusRequest?.requestId, focusRequest?.stepId]);
 
   const selectedIndex = trace?.steps.findIndex((step) => step.id === selectedId) ?? -1;
@@ -22,7 +28,7 @@ export default function OptimizationTraceView({ trace, ran, focusRequest }: Opti
   );
   const previousStep = selectedIndex > 0 ? trace?.steps[selectedIndex - 1] ?? null : null;
   const tacUnchanged = Boolean(
-    selected && previousStep && JSON.stringify(selected.tac) === JSON.stringify(previousStep.tac),
+    selected && previousStep && !compareTAC(previousStep.tac, selected.tac).changed,
   );
   const isOptimizationPass = Boolean(selected && selected.id !== 'original' && selected.id !== 'final');
   const statusLabel = !selected?.applied
@@ -48,7 +54,10 @@ export default function OptimizationTraceView({ trace, ran, focusRequest }: Opti
             <button
               key={step.id}
               type="button"
-              onClick={() => setSelectedId(step.id)}
+              onClick={() => {
+                setSelectedId(step.id);
+                if (step.id === 'original') setDisplayMode('snapshot');
+              }}
               className={`rounded border px-2.5 py-1.5 text-xs transition ${
                 active
                   ? 'border-sky-500 bg-sky-500/15 text-sky-200'
@@ -86,7 +95,38 @@ export default function OptimizationTraceView({ trace, ran, focusRequest }: Opti
             )}
           </div>
 
-          <TacView tac={selected.tac} ran />
+          <div className="mb-3 flex flex-wrap items-center gap-2" role="tablist" aria-label="Optimization result view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={displayMode === 'snapshot'}
+              onClick={() => setDisplayMode('snapshot')}
+              className={`rounded border px-3 py-1.5 text-xs font-medium ${displayMode === 'snapshot' ? 'border-sky-500 bg-sky-500/15 text-sky-200' : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'}`}
+            >
+              TAC Snapshot
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={displayMode === 'diff'}
+              disabled={selectedIndex <= 0 || previousStep === null}
+              onClick={() => setDisplayMode('diff')}
+              className={`rounded border px-3 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${displayMode === 'diff' ? 'border-amber-500 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-950 text-slate-400 hover:text-slate-200'}`}
+              title={selectedIndex <= 0 ? 'Original TAC has no previous snapshot to compare' : `Compare ${previousStep?.name ?? 'previous step'} with ${selected.name}`}
+            >
+              Diff from previous step
+            </button>
+          </div>
+          {displayMode === 'diff' && previousStep ? (
+            <OptimizationDiffView
+              beforeName={previousStep.name}
+              afterName={selected.name}
+              before={previousStep.tac}
+              after={selected.tac}
+            />
+          ) : (
+            <TacView tac={selected.tac} ran />
+          )}
         </div>
       )}
     </div>

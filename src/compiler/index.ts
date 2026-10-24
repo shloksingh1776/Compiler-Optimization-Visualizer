@@ -92,7 +92,7 @@ export { evaluateBinary, evaluateUnary } from './optimizer/evaluate.ts';
 export { checkDivisionByZero } from './optimizer/divisionByZeroCheck.ts';
 
 // --- Phase 8: Before/After Comparison ---
-export { compareTAC, type TACComparison } from './optimizer/comparison.ts';
+export { compareTAC, tacInstructionsEqual, type TACComparison } from './optimizer/comparison.ts';
 
 // --- Pipeline (runs the phases in order) ---
 export {
