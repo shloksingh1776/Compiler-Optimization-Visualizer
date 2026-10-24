@@ -515,10 +515,10 @@ A dark theme remains the default and an optional light theme is available from t
 Tests for the workspace helpers are in `tests/stage28-workspace-ui.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.
 
 
-## Stage 9: Optimization Diff View
+## Stage 29: Optimization Diff View
 
 The Optimization workspace can compare the saved TAC snapshot before and after the currently selected optimization step. The diff uses the optimizer's existing snapshots (it does not rerun optimization), aligns unchanged instructions in order, pairs rewrites, and marks removed and added instructions. Main-program instructions and each function body are displayed separately. The diff recognizes semantic differences in instruction scope metadata even when the formatted TAC line is identical, while ignoring `sourceNodeId` provenance.
 
 The view is opened from the Optimization tab using **Diff from previous step**. The original snapshot has no prior step to compare. The final snapshot is compared with the result after Dead Code Elimination and constant materialization.
 
-Tests for Stage 9 are in `tests/stage29-optimization-diff.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.
+Tests for Stage 29 are in `tests/stage29-optimization-diff.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.
