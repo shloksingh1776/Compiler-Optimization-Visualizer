@@ -3,6 +3,14 @@ import type { Operand, TACInstruction, TACProgram } from './ir/tac.ts';
 
 export type RuntimeValue = number | boolean;
 
+/** Runtime failure enriched with the TAC instruction's AST provenance when available. */
+export class RuntimeExecutionError extends Error {
+  constructor(message: string, readonly sourceNodeId?: string) {
+    super(message);
+    this.name = 'RuntimeExecutionError';
+  }
+}
+
 export interface ExecutionResult {
   readonly output: string[];
   readonly returnValue?: RuntimeValue;
@@ -149,7 +157,8 @@ function executeInstructions(
   let pc = 0;
   while (pc < instructions.length) {
     const instruction = instructions[pc]!;
-    switch (instruction.kind) {
+    try {
+      switch (instruction.kind) {
       case 'label': pc++; break;
       case 'jump': {
         const target = labels.get(instruction.label);
@@ -235,6 +244,13 @@ function executeInstructions(
           ? { output }
           : { output, returnValue: readOperand(instruction.operand, frame, globals, legacyTemporaryNames) };
       case 'param': case 'functionBegin': case 'functionEnd': pc++; break;
+      }
+    } catch (error) {
+      // Preserve the deepest failing instruction when a function call propagates
+      // a runtime error. Otherwise, attach this instruction's source provenance.
+      if (error instanceof RuntimeExecutionError && error.sourceNodeId) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new RuntimeExecutionError(message, instruction.sourceNodeId);
     }
   }
   return { output };

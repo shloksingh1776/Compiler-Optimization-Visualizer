@@ -98,18 +98,25 @@ export default function OptimizationDiffView({ beforeName, afterName, before, af
           <SummaryCard label="Added" value={diff.counts.added} tone="green" />
         </div>
         {diff.programMetadataChanged && (
-          <p className="mt-3 rounded border border-amber-900/70 bg-amber-950/20 p-2 text-xs text-amber-200">
-            Program global-variable metadata differs between these snapshots and is not represented by a TAC instruction line.
-            <span className="mt-1 block">Before globals: {(before.globalVariables ?? []).join(', ') || '(none)'}</span>
-            <span className="block">After globals: {(after.globalVariables ?? []).join(', ') || '(none)'}</span>
-          </p>
+          <div className="mt-3 space-y-1 rounded border border-amber-900/70 bg-amber-950/20 p-2 text-xs text-amber-200">
+            <p>Program metadata differs between these snapshots and is not represented by a TAC instruction line.</p>
+            {diff.globalVariablesChanged && (
+              <>
+                <span className="block">Before globals: {(before.globalVariables ?? []).join(', ') || '(none)'}</span>
+                <span className="block">After globals: {(after.globalVariables ?? []).join(', ') || '(none)'}</span>
+              </>
+            )}
+            {diff.temporaryCountChanged && (
+              <span className="block">Temporary count: {before.temporaryCount} → {after.temporaryCount}</span>
+            )}
+          </div>
         )}
       </div>
 
       {diff.counts.changed === 0 && diff.counts.removed === 0 && diff.counts.added === 0
         && !diff.programMetadataChanged && !diff.sections.some((section) => section.metadataChanged) && (
           <p className="rounded border border-sky-900/60 bg-sky-950/80 p-3 text-xs text-sky-200">
-            This step did not change any displayed TAC instructions or tracked scope metadata. The unchanged rows below are the real instructions in both snapshots.
+            This step did not change any displayed TAC instructions or tracked scope/program/function metadata. The unchanged rows below are the real instructions in both snapshots.
           </p>
         )}
 

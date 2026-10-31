@@ -89,6 +89,7 @@ describe('Stage 26 - source-linked diagnostics', () => {
     expect(getDiagnosticPhaseLabel('syntax')).toBe('Syntax analysis');
     expect(getDiagnosticPhaseLabel('semantic')).toBe('Semantic analysis');
     expect(getDiagnosticPhaseLabel('optimizer')).toBe('Compile-time optimization check');
+    expect(getDiagnosticPhaseLabel('runtime')).toBe('Runtime execution');
   });
 
   it('retains genuine source spans for lexical errors', () => {
@@ -128,10 +129,25 @@ describe('Stage 26 - source-linked diagnostics', () => {
     expect(error.column).toBeGreaterThan(0);
   });
 
-  it('does not fabricate source offsets for runtime error messages', () => {
-    const result = compile('int value; print(value);');
+  it('links a runtime failure to the actual source statement when TAC provenance is available', () => {
+    const source = 'int value;\nprint(value);';
+    const result = compile(source);
     expect(result.runtimeError).toContain('Runtime value');
-    // Runtime errors are strings today; the UI presents the message without a fake line/column link.
-    expect(typeof result.runtimeError).toBe('string');
+    expect(result.runtimeDiagnostic?.stage).toBe('runtime');
+    expect(result.runtimeDiagnostic).toBeDefined();
+    const range = getDiagnosticSourceRange(result.runtimeDiagnostic!, source.length);
+    expect(range).toEqual({ start: source.indexOf('print(value);'), end: source.indexOf('print(value);') + 'print(value);'.length });
+    expect(source.slice(range!.start, range!.end)).toBe('print(value);');
+    expect(formatDiagnosticLocation(result.runtimeDiagnostic!)).toBe('Line 2, column 1');
   });
+
+  it('links a runtime error inside a called function to the failing expression, not only the call site', () => {
+    const source = 'int divide(int n) { return 10 / n; }\nprint(divide(0));';
+    const result = compile(source);
+    expect(result.runtimeError).toBe('Runtime division by zero');
+    expect(result.runtimeDiagnostic?.stage).toBe('runtime');
+    expect(source.slice(result.runtimeDiagnostic!.start, result.runtimeDiagnostic!.end)).toBe('10 / n');
+    expect(result.runtimeDiagnostic!.line).toBe(1);
+  });
+
 });

@@ -15,7 +15,7 @@
  */
 
 /** The pipeline stages that can report a problem. */
-export type Stage = 'lexical' | 'syntax' | 'semantic' | 'tac' | 'optimizer';
+export type Stage = 'lexical' | 'syntax' | 'semantic' | 'tac' | 'optimizer' | 'runtime';
 
 /**
  * `error`   - the program is invalid, compilation stops after this stage.

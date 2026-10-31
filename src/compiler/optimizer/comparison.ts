@@ -117,6 +117,8 @@ function functionMetadataEqual(a: TACFunction, b: TACFunction): boolean {
 }
 
 function tacEqual(a: TACProgram, b: TACProgram): boolean {
+  // Temporary count affects legacy TAC interpretation when targetKind metadata is absent.
+  if (a.temporaryCount !== b.temporaryCount) return false;
   if (!instructionListEqual(a.instructions, b.instructions)) return false;
   if (!sameStringSet(a.globalVariables, b.globalVariables)) return false;
   const af = a.functions ?? {};

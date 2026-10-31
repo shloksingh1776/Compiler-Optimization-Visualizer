@@ -18,7 +18,9 @@ C compiler, does not use LLVM, and does not generate machine code.
 
 ---
 
-## Build status
+## Earlier compiler implementation milestones
+
+The table below uses the project's original compiler-development numbering. The separate UI-enhancement roadmap is listed immediately after it to avoid confusing those historical milestone numbers with the current visualizer stages.
 
 | Phase | Stage | Status |
 | --- | --- | --- |
@@ -34,10 +36,15 @@ C compiler, does not use LLVM, and does not generate machine code.
 
 **Extension Stage 3:** Type-aware optimization passes for both `int` and `float` are complete in the current project version.
 
-`src/App.tsx` shows the source editor, the token table, the AST, the symbol
-table, original vs. optimized three address code (with the ordered list of
-optimization passes, what each one does, and before/after statistics), and
-diagnostics for every compiler error.
+### Current visualization enhancement roadmap
+
+The nine enhancement stages are implemented in the current source: pass-by-pass optimization snapshots; the comment-free example selector; the source editor; complete optimization coverage; the interactive Token Inspector; source-linked diagnostics; the interactive compiler pipeline; the resizable/tabbed workspace and themes; and the Optimization Diff View. Run the verification commands below before treating any packaged revision as a release.
+
+The current workspace has resizable editor/results panes, tabs for Tokens, AST,
+Symbols, TAC, Optimization, Output and Diagnostics, and an optional light theme.
+The Compiler Pipeline is selectable, and Optimization includes a side-by-side
+Diff View for consecutive saved TAC snapshots. Runtime failures link back to the
+source only when the failing TAC instruction maps to a genuine AST span.
 
 The source editor includes MiniC syntax highlighting, line numbers, Tab/Shift+Tab indentation, indentation continuation on Enter, and matching-bracket highlighting. It is implemented locally without adding an editor dependency; compiler tokenization and semantics remain in `src/compiler/`.
 
@@ -46,7 +53,7 @@ The source editor includes MiniC syntax highlighting, line numbers, Tab/Shift+Ta
 ## Running the project
 
 ```bash
-npm install
+npm ci
 npm run dev        # start the dev server
 npm test           # run the test suite (Vitest)
 npm run typecheck  # TypeScript strict-mode check
@@ -484,7 +491,7 @@ The Interactive Token Inspector displays the actual lexer stream, with search an
 
 The Errors / Diagnostics panel groups messages by lexical analysis, syntax analysis, semantic analysis, compile-time optimization checks, and runtime execution. Compiler diagnostics display their phase, severity, reported line and column, and original message. When their source offsets are valid for the current source text, **Go to source** scrolls the page back to the editor, scrolls within the editor to the reported source line, selects that exact compiler-reported range, and marks it with a red diagnostic highlight that is visually distinct from the Token Inspector's blue selection. Repeated clicks on the same diagnostic navigate again.
 
-Editing source or loading a different example clears the old diagnostic selection. A zero-length compiler span (such as an error at end of input) moves the caret to the reported position without highlighting invented characters. Runtime messages are separated from compile-time diagnostics; the current interpreter only supplies a message string for runtime errors, so the UI explicitly does not invent a source location or navigation link for them.
+Editing source or loading a different example clears the old diagnostic selection. A zero-length compiler span (such as an error at end of input) moves the caret to the reported position without highlighting invented characters. Runtime messages are separated from compile-time diagnostics. When a failing TAC instruction retains a source-node ID that maps to a valid AST span, runtime diagnostics show that location and provide **Go to source**. If that mapping is unavailable, the UI leaves the location unreported rather than guessing.
 
 Stage 26 adds a focused test file at `tests/stage26-source-linked-diagnostics.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` to verify the change with the project's full toolchain.
 
@@ -515,10 +522,10 @@ A dark theme remains the default and an optional light theme is available from t
 Tests for the workspace helpers are in `tests/stage28-workspace-ui.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.
 
 
-## Stage 29: Optimization Diff View
+## Stage 9: Optimization Diff View
 
 The Optimization workspace can compare the saved TAC snapshot before and after the currently selected optimization step. The diff uses the optimizer's existing snapshots (it does not rerun optimization), aligns unchanged instructions in order, pairs rewrites, and marks removed and added instructions. Main-program instructions and each function body are displayed separately. The diff recognizes semantic differences in instruction scope metadata even when the formatted TAC line is identical, while ignoring `sourceNodeId` provenance.
 
 The view is opened from the Optimization tab using **Diff from previous step**. The original snapshot has no prior step to compare. The final snapshot is compared with the result after Dead Code Elimination and constant materialization.
 
-Tests for Stage 29 are in `tests/stage29-optimization-diff.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.
+Tests for Stage 9 are in `tests/stage29-optimization-diff.test.ts`. Run `npm run typecheck`, `npm test`, and `npm run build` for full verification.

@@ -39,6 +39,8 @@ export interface OptimizationDiffResult {
   readonly sections: readonly OptimizationDiffSection[];
   readonly counts: OptimizationDiffCounts;
   readonly programMetadataChanged: boolean;
+  readonly globalVariablesChanged: boolean;
+  readonly temporaryCountChanged: boolean;
 }
 
 type EditOperation =
@@ -257,9 +259,13 @@ export function buildOptimizationDiff(before: TACProgram, after: TACProgram): Op
     added: total.added + section.counts.added,
   }), emptyCounts());
 
+  const globalVariablesChanged = !sameStringSet(before.globalVariables, after.globalVariables);
+  const temporaryCountChanged = before.temporaryCount !== after.temporaryCount;
   return {
     sections,
     counts,
-    programMetadataChanged: !sameStringSet(before.globalVariables, after.globalVariables),
+    programMetadataChanged: globalVariablesChanged || temporaryCountChanged,
+    globalVariablesChanged,
+    temporaryCountChanged,
   };
 }

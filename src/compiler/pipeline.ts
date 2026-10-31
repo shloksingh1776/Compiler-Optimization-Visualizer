@@ -76,8 +76,8 @@ import { constantPropagation } from './optimizer/passes/constantPropagation.ts';
 import { constantFolding } from './optimizer/passes/constantFolding.ts';
 import { checkDivisionByZero } from './optimizer/divisionByZeroCheck.ts';
 import { compareTAC, type TACComparison } from './optimizer/comparison.ts';
-import type { CompilerError } from './errors.ts';
-import { executeTAC } from './interpreter.ts';
+import { makeError, type CompilerError, type SourceSpan } from './errors.ts';
+import { executeTAC, RuntimeExecutionError } from './interpreter.ts';
 
 /** The phases implemented so far. */
 export type PipelineStage = 'lexical' | 'syntax' | 'semantic' | 'tac' | 'optimization';
@@ -138,6 +138,8 @@ export interface CompilationResult {
   readonly returnValue?: number | boolean;
   /** Runtime diagnostic produced when a print() needs an unavailable value. */
   readonly runtimeError?: string;
+  /** Located runtime diagnostic when the failing TAC instruction maps to a real AST span. */
+  readonly runtimeDiagnostic?: CompilerError;
   /** Whether the interpreter ran for the current source. */
   readonly executionStatus: 'executed' | 'not-needed' | 'not-run' | 'error';
   readonly lexicalErrors: CompilerError[];
@@ -163,6 +165,36 @@ export interface CompilationResult {
  * simple passes lets a folded nested constant become visible to a later
  * division without carrying facts across branch/loop boundaries.
  */
+function findAstSourceSpan(root: unknown, nodeId: string): SourceSpan | null {
+  const visited = new WeakSet<object>();
+  const visit = (value: unknown): SourceSpan | null => {
+    if (value === null || typeof value !== 'object') return null;
+    if (visited.has(value)) return null;
+    visited.add(value);
+    const record = value as Record<string, unknown>;
+    if (
+      record.id === nodeId
+      && Number.isInteger(record.line) && (record.line as number) >= 1
+      && Number.isInteger(record.column) && (record.column as number) >= 1
+      && Number.isInteger(record.start) && (record.start as number) >= 0
+      && Number.isInteger(record.end) && (record.end as number) >= (record.start as number)
+    ) {
+      return {
+        line: record.line as number,
+        column: record.column as number,
+        start: record.start as number,
+        end: record.end as number,
+      };
+    }
+    for (const child of Object.values(record)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return null;
+  };
+  return visit(root);
+}
+
 function prepareDivisionCheckTAC(tac: TACProgram): TACProgram {
   const prepareInstructions = (initial: TACInstruction[]): TACInstruction[] => {
     let current = initial;
@@ -378,6 +410,7 @@ export function compile(source: string): CompilationResult {
   let output: string[] = [];
   let returnValue: number | boolean | undefined;
   let runtimeError: string | undefined;
+  let runtimeDiagnostic: CompilerError | undefined;
   let executionStatus: CompilationResult['executionStatus'] = 'not-needed';
   if (hasExecutionTrigger) {
     executionStatus = 'executed';
@@ -390,6 +423,10 @@ export function compile(source: string): CompilationResult {
       // A later print of such a variable is a runtime problem, not a reason
       // for the entire compiler UI to crash or go blank.
       runtimeError = error instanceof Error ? error.message : String(error);
+      if (error instanceof RuntimeExecutionError && error.sourceNodeId) {
+        const span = findAstSourceSpan(program, error.sourceNodeId);
+        if (span) runtimeDiagnostic = makeError('runtime', runtimeError, span);
+      }
       executionStatus = 'error';
     }
   }
@@ -408,6 +445,7 @@ export function compile(source: string): CompilationResult {
     executionStatus,
     ...(returnValue !== undefined ? { returnValue } : {}),
     ...(runtimeError ? { runtimeError } : {}),
+    ...(runtimeDiagnostic ? { runtimeDiagnostic } : {}),
     lexicalErrors: [],
     syntaxErrors: [],
     semanticErrors: [],

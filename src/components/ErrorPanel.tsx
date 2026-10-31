@@ -1,10 +1,9 @@
 /**
  * SOURCE-LINKED DIAGNOSTICS
  *
- * Diagnostics stay grouped by the compiler phase that reported them. When a
- * compiler error has a valid source span, its action navigates to that exact
- * span in the editor. Runtime messages currently do not carry source offsets,
- * so they are shown separately without inventing a location or jump target.
+ * Diagnostics stay grouped by the phase that reported them. Compiler errors
+ * and runtime failures navigate only when a genuine, in-bounds source span is
+ * available; unavailable locations are never guessed.
  */
 
 import type { CompilerError } from '../compiler/index.ts';
@@ -20,6 +19,7 @@ interface ErrorPanelProps {
   semanticErrors: readonly CompilerError[];
   divisionByZeroErrors: readonly CompilerError[];
   runtimeError?: string;
+  runtimeDiagnostic?: CompilerError;
   sourceLength: number;
   onSelectDiagnostic: (error: CompilerError) => void;
 }
@@ -90,12 +90,15 @@ export default function ErrorPanel({
   semanticErrors,
   divisionByZeroErrors,
   runtimeError,
+  runtimeDiagnostic,
   sourceLength,
   onSelectDiagnostic,
 }: ErrorPanelProps) {
   const compilerDiagnosticCount =
     lexicalErrors.length + syntaxErrors.length + semanticErrors.length + divisionByZeroErrors.length;
   const total = compilerDiagnosticCount + (runtimeError ? 1 : 0);
+  const runtimeRange = runtimeDiagnostic ? getDiagnosticSourceRange(runtimeDiagnostic, sourceLength) : null;
+  const runtimeLocation = runtimeDiagnostic ? formatDiagnosticLocation(runtimeDiagnostic) : null;
 
   if (total === 0) {
     return (
@@ -144,12 +147,24 @@ export default function ErrorPanel({
       {runtimeError ? (
         <section aria-label="Runtime errors" className="rounded border border-amber-900/60 bg-amber-950/20 p-3">
           <h3 className="mb-1 text-xs font-semibold tracking-wide text-amber-200 uppercase">Runtime errors (1)</h3>
-          <p className="mb-2 text-xs text-slate-500">Reported while executing the program after compilation. The interpreter does not currently provide a source span for this message.</p>
-          <div className="flex items-start gap-2">
-            <span className="mt-0.5 rounded bg-amber-950 px-2 py-0.5 text-xs font-semibold uppercase text-amber-300">error</span>
-            <p className="break-words text-sm text-amber-100">{runtimeError}</p>
+          <p className="mb-2 text-xs text-slate-500">Reported while executing the program after compilation.</p>
+          <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded bg-amber-950 px-2 py-0.5 font-semibold uppercase text-amber-300">error</span>
+            {runtimeLocation ? <span className="font-mono text-slate-300">{runtimeLocation}</span> : null}
           </div>
-          <p className="mt-2 text-xs text-slate-500">Source navigation is unavailable for this runtime message because no source location was reported.</p>
+          <p className="break-words text-sm text-amber-100">{runtimeError}</p>
+          {runtimeDiagnostic && runtimeRange ? (
+            <button
+              type="button"
+              className="mt-2 rounded border border-sky-800 bg-sky-950/60 px-2.5 py-1 text-xs font-medium text-sky-200 transition hover:border-sky-500 hover:bg-sky-900/70 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              onClick={() => onSelectDiagnostic(runtimeDiagnostic)}
+              aria-label={`Go to source for runtime error at ${runtimeLocation}`}
+            >
+              Go to source <span aria-hidden="true">→</span>
+            </button>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">A reliable source span is not available for navigation.</p>
+          )}
         </section>
       ) : null}
     </div>

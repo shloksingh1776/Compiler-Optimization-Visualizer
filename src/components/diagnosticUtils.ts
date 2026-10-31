@@ -38,5 +38,6 @@ export function getDiagnosticPhaseLabel(stage: CompilerError['stage']): string {
     case 'semantic': return 'Semantic analysis';
     case 'tac': return 'Three-address code';
     case 'optimizer': return 'Compile-time optimization check';
+    case 'runtime': return 'Runtime execution';
   }
 }

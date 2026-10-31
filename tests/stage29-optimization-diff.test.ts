@@ -136,6 +136,19 @@ describe('Stage 29 - Optimization Diff View', () => {
     expect(compareTAC(before, after).changed).toBe(true);
   });
 
+  it('detects temporary-count changes because they affect legacy TAC target interpretation', () => {
+    const legacyAssignment: TACInstruction = {
+      kind: 'assign', target: 't1', value: { kind: 'constant', value: 7, valueType: 'int' }, sourceNodeId: 'legacy-target',
+    };
+    const before = program([legacyAssignment], { temporaryCount: 0 });
+    const after = program([legacyAssignment], { temporaryCount: 1 });
+    const diff = buildOptimizationDiff(before, after);
+
+    expect(diff.temporaryCountChanged).toBe(true);
+    expect(diff.programMetadataChanged).toBe(true);
+    expect(compareTAC(before, after).changed).toBe(true);
+  });
+
   it('detects function-signature and local-variable metadata changes', () => {
     const beforeFunction: TACFunction = {
       name: 'readValue',

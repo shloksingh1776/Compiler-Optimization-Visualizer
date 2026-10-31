@@ -157,6 +157,7 @@ export default function App() {
     stageStatus,
     output,
     runtimeError,
+    runtimeDiagnostic,
     returnValue,
   } = result;
   const lineCount = source.split('\n').length;
@@ -265,6 +266,7 @@ export default function App() {
           semanticErrors={semanticErrors}
           divisionByZeroErrors={divisionByZeroErrors}
           runtimeError={runtimeError}
+          runtimeDiagnostic={runtimeDiagnostic}
           sourceLength={source.length}
           onSelectDiagnostic={handleDiagnosticSelection}
         />
